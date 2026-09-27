@@ -1,0 +1,30 @@
+.venv
+.idea
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+.env.*
+!.env.example
+
+# Local SQLite databases and journal files
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+
+# Python build, test, and tool artifacts
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+build/
+dist/
+*.egg-info/
+*.log
+
+# macOS metadata
+.DS_Store
