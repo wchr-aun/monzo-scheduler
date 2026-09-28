@@ -41,14 +41,6 @@ class Account(BaseModel):
     created: Timestamp
 
 
-class AccountsResponse(BaseModel):
-    """Response returned by the accounts endpoint."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    accounts: list[Account]
-
-
 class BalanceResponse(BaseModel):
     """Balance details exposed by this service."""
 
@@ -58,6 +50,28 @@ class BalanceResponse(BaseModel):
     total_balance: int = Field(strict=True)
     currency: str = Field(min_length=3, max_length=3)
     spend_today: int = Field(strict=True)
+
+
+class AccountWithBalance(Account):
+    """Account details with an explicitly optional balance payload."""
+
+    balance_details: BalanceResponse | None = None
+
+
+class AccountsResponse(BaseModel):
+    """Response returned by the accounts endpoint."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    accounts: list[Account]
+
+
+class AccountsWithBalancesResponse(BaseModel):
+    """Response returned by the enriched accounts endpoint."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    accounts: list[AccountWithBalance]
 
 
 class Pot(BaseModel):

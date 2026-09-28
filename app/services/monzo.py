@@ -1,11 +1,15 @@
 """Monzo OAuth and API client operations."""
 
+import asyncio
+from collections.abc import Awaitable
+
 import httpx
 
 from app.config import Settings
 from app.schemas.monzo import MonzoTokenResponse
 
 MONZO_API_URL = "https://api.monzo.com"
+type BalanceResult = httpx.Response | httpx.RequestError
 
 
 async def exchange_authorization_code(code: str, settings: Settings) -> MonzoTokenResponse:
@@ -50,6 +54,26 @@ async def get_accounts(
 
 async def get_balance(access_token: str, account_id: str) -> httpx.Response:
     return await _get("/balance", access_token, params={"account_id": account_id})
+
+
+async def get_balances(
+    access_token: str, account_ids: list[str]
+) -> list[BalanceResult]:
+    """Fetch balances concurrently without failing the whole batch."""
+    balance_requests: list[Awaitable[BalanceResult]] = [
+        _get_balance_result(access_token, account_id) for account_id in account_ids
+    ]
+    results = await asyncio.gather(*balance_requests)
+    return list(results)
+
+
+async def _get_balance_result(
+    access_token: str, account_id: str
+) -> BalanceResult:
+    try:
+        return await get_balance(access_token, account_id)
+    except httpx.RequestError as exc:
+        return exc
 
 
 async def get_pots(access_token: str, current_account_id: str) -> httpx.Response:

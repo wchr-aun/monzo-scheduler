@@ -110,6 +110,71 @@ def test_resource_routes_pass_through_monzo_responses(
     assert dict(upstream.calls.last.request.url.params) == expected_query
 
 
+def test_accounts_with_balances_include_details_for_each_account(client, settings):
+    _save_credential(client)
+    accounts_body = {
+        "accounts": [
+            {
+                "id": "acc_123",
+                "description": "Personal Account",
+                "created": "2015-11-13T12:17:42Z",
+            },
+            {
+                "id": "acc_456",
+                "description": "Joint Account",
+                "created": "2020-06-01T08:00:00Z",
+            },
+        ]
+    }
+    balances = {
+        "acc_123": {
+            "balance": 5000,
+            "total_balance": 6000,
+            "currency": "GBP",
+            "spend_today": 100,
+        },
+        "acc_456": {
+            "balance": 7000,
+            "total_balance": 8000,
+            "currency": "GBP",
+            "spend_today": 200,
+        },
+    }
+
+    with respx.mock(assert_all_called=True) as monzo_mock:
+        accounts = monzo_mock.get(
+            "https://api.monzo.com/accounts", params={"account_type": "uk_retail"}
+        ).mock(return_value=httpx.Response(200, json=accounts_body))
+        balance_routes = {
+            account_id: monzo_mock.get(
+                "https://api.monzo.com/balance", params={"account_id": account_id}
+            ).mock(return_value=httpx.Response(200, json=balance))
+            for account_id, balance in balances.items()
+        }
+        response = client.get(
+            "/accounts-with-balances?account_type=uk_retail",
+            headers={"Authorization": f"Bearer {_session_token(settings)}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "accounts": [
+            {
+                **account,
+                "balance_details": balances[account["id"]],
+            }
+            for account in accounts_body["accounts"]
+        ]
+    }
+    assert accounts.calls.last.request.headers["Authorization"] == (
+        "Bearer test-access-token"
+    )
+    for route in balance_routes.values():
+        assert route.calls.last.request.headers["Authorization"] == (
+            "Bearer test-access-token"
+        )
+
+
 def test_accounts_surfaces_monzo_error_in_response_and_logs(client, settings, caplog):
     _save_credential(client)
     caplog.set_level(logging.WARNING)
@@ -196,6 +261,68 @@ def test_accounts_only_returns_fields_in_service_schema(client, settings):
             }
         ]
     }
+
+
+def test_accounts_with_balances_tolerates_all_balance_requests_failing(
+    client, settings, caplog
+):
+    _save_credential(client)
+    caplog.set_level(logging.WARNING)
+    with respx.mock(assert_all_called=True) as monzo_mock:
+        monzo_mock.get("https://api.monzo.com/accounts").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "accounts": [
+                        {
+                            "id": "acc_123",
+                            "description": "Personal Account",
+                            "created": "2015-11-13T12:17:42Z",
+                        },
+                        {
+                            "id": "acc_456",
+                            "description": "Joint Account",
+                            "created": "2020-06-01T08:00:00Z",
+                        },
+                    ]
+                },
+            )
+        )
+        monzo_mock.get(
+            "https://api.monzo.com/balance", params={"account_id": "acc_123"}
+        ).mock(
+            return_value=httpx.Response(
+                403,
+                json={"code": "forbidden", "message": "Balance unavailable"},
+            )
+        )
+        monzo_mock.get(
+            "https://api.monzo.com/balance", params={"account_id": "acc_456"}
+        ).mock(side_effect=httpx.ConnectError("Monzo is offline"))
+        response = client.get(
+            "/accounts-with-balances",
+            headers={"Authorization": f"Bearer {_session_token(settings)}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "accounts": [
+            {
+                "id": "acc_123",
+                "description": "Personal Account",
+                "created": "2015-11-13T12:17:42Z",
+                "balance_details": None,
+            },
+            {
+                "id": "acc_456",
+                "description": "Joint Account",
+                "created": "2020-06-01T08:00:00Z",
+                "balance_details": None,
+            },
+        ]
+    }
+    assert "monzo_request_failed operation=balance upstream_status=403" in caplog.text
+    assert "monzo_request_failed operation=balance reason=monzo_unreachable" in caplog.text
 
 
 def test_accounts_rejects_invalid_monzo_response(client, settings, caplog):
