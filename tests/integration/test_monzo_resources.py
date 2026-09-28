@@ -39,20 +39,6 @@ def _save_credential(client, *, expired=False):
     ("path", "upstream_url", "upstream_body", "expected_query"),
     [
         (
-            "/accounts?account_type=uk_retail",
-            "https://api.monzo.com/accounts",
-            {
-                "accounts": [
-                    {
-                        "id": "acc_123",
-                        "description": "Personal Account",
-                        "created": "2015-11-13T12:17:42Z",
-                    }
-                ]
-            },
-            {"account_type": "uk_retail"},
-        ),
-        (
             "/balance?account_id=acc_123",
             "https://api.monzo.com/balance",
             {
@@ -175,6 +161,12 @@ def test_accounts_with_balances_include_details_for_each_account(client, setting
         )
 
 
+def test_accounts_endpoint_is_removed(client):
+    response = client.get("/accounts")
+
+    assert response.status_code == 404
+
+
 def test_accounts_surfaces_monzo_error_in_response_and_logs(client, settings, caplog):
     _save_credential(client)
     caplog.set_level(logging.WARNING)
@@ -186,7 +178,7 @@ def test_accounts_surfaces_monzo_error_in_response_and_logs(client, settings, ca
             )
         )
         response = client.get(
-            "/accounts",
+            "/accounts-with-balances",
             headers={"Authorization": f"Bearer {_session_token(settings)}"},
         )
 
@@ -214,7 +206,7 @@ def test_accounts_passes_through_unapproved_monzo_access(client, settings, caplo
             )
         )
         response = client.get(
-            "/accounts",
+            "/accounts-with-balances",
             headers={"Authorization": f"Bearer {_session_token(settings)}"},
         )
 
@@ -227,7 +219,9 @@ def test_accounts_passes_through_unapproved_monzo_access(client, settings, caplo
     assert "monzo_message='Access forbidden due to insufficient permissions.'" in caplog.text
 
 
-def test_accounts_only_returns_fields_in_service_schema(client, settings):
+def test_accounts_with_balances_only_returns_fields_in_service_schema(
+    client, settings
+):
     _save_credential(client)
     with respx.mock(assert_all_called=True) as monzo_mock:
         monzo_mock.get("https://api.monzo.com/accounts").mock(
@@ -246,8 +240,22 @@ def test_accounts_only_returns_fields_in_service_schema(client, settings):
                 },
             )
         )
+        monzo_mock.get(
+            "https://api.monzo.com/balance", params={"account_id": "acc_123"}
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "balance": 5000,
+                    "total_balance": 6000,
+                    "currency": "GBP",
+                    "spend_today": 100,
+                    "new_balance_field": "not exposed",
+                },
+            )
+        )
         response = client.get(
-            "/accounts",
+            "/accounts-with-balances",
             headers={"Authorization": f"Bearer {_session_token(settings)}"},
         )
 
@@ -258,6 +266,12 @@ def test_accounts_only_returns_fields_in_service_schema(client, settings):
                 "id": "acc_123",
                 "description": "Personal Account",
                 "created": "2015-11-13T12:17:42Z",
+                "balance_details": {
+                    "balance": 5000,
+                    "total_balance": 6000,
+                    "currency": "GBP",
+                    "spend_today": 100,
+                },
             }
         ]
     }
@@ -333,7 +347,7 @@ def test_accounts_rejects_invalid_monzo_response(client, settings, caplog):
             return_value=httpx.Response(200, json={"accounts": [{"id": "acc_123"}]})
         )
         response = client.get(
-            "/accounts",
+            "/accounts-with-balances",
             headers={"Authorization": f"Bearer {_session_token(settings)}"},
         )
 
@@ -361,7 +375,7 @@ def test_expired_access_token_is_refreshed_and_saved(client, settings):
             return_value=httpx.Response(200, json={"accounts": []})
         )
         response = client.get(
-            "/accounts",
+            "/accounts-with-balances",
             headers={"Authorization": f"Bearer {_session_token(settings)}"},
         )
 
@@ -388,17 +402,21 @@ def test_expired_access_token_is_refreshed_and_saved(client, settings):
         ({"Authorization": "Bearer invalid"}, "Invalid or expired bearer token"),
     ],
 )
-def test_accounts_requires_valid_application_jwt(client, headers, expected_detail):
-    response = client.get("/accounts", headers=headers)
+def test_accounts_with_balances_requires_valid_application_jwt(
+    client, headers, expected_detail
+):
+    response = client.get("/accounts-with-balances", headers=headers)
 
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
     assert response.json()["detail"] == expected_detail
 
 
-def test_accounts_rejects_jwt_without_stored_credentials(client, settings):
+def test_accounts_with_balances_rejects_jwt_without_stored_credentials(
+    client, settings
+):
     response = client.get(
-        "/accounts",
+        "/accounts-with-balances",
         headers={"Authorization": f"Bearer {_session_token(settings)}"},
     )
 
@@ -411,13 +429,16 @@ def test_authentication_failure_is_traceable_without_logging_token(client, caplo
     caplog.set_level(logging.WARNING)
 
     response = client.get(
-        "/accounts",
+        "/accounts-with-balances",
         headers={"Authorization": f"Bearer {bearer_token}"},
     )
 
     request_id = response.headers["x-request-id"]
     assert response.status_code == 401
-    assert "authentication_failed path=/accounts reason=invalid_or_expired_jwt" in caplog.text
+    assert (
+        "authentication_failed path=/accounts-with-balances "
+        "reason=invalid_or_expired_jwt" in caplog.text
+    )
     assert f"request_id={request_id}" in caplog.text
     assert "status_code=401" in caplog.text
     assert bearer_token not in caplog.text

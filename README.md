@@ -5,7 +5,6 @@ A Python and FastAPI web app for connecting to Monzo and scheduling savings-pot 
 After completing the Monzo OAuth flow, send the returned application token as
 `Authorization: Bearer <token>` to these endpoints:
 
-- `GET /accounts` (optional `account_type` query parameter)
 - `GET /accounts-with-balances` (optional `account_type` query parameter; each
   account includes `balance_details`, which is `null` when its balance request
   fails)

@@ -58,8 +58,8 @@ class AccountWithBalance(Account):
     balance_details: BalanceResponse | None = None
 
 
-class AccountsResponse(BaseModel):
-    """Response returned by the accounts endpoint."""
+class MonzoAccountsResponse(BaseModel):
+    """Account list returned by Monzo before balance enrichment."""
 
     model_config = ConfigDict(extra="ignore")
 

@@ -10,10 +10,10 @@ from pydantic import BaseModel, ValidationError
 
 from app.observability import get_logger, monzo_error_details
 from app.schemas.monzo import (
-    AccountsResponse,
     AccountsWithBalancesResponse,
     AccountWithBalance,
     BalanceResponse,
+    MonzoAccountsResponse,
     PotsResponse,
 )
 from app.services.authorization import (
@@ -100,18 +100,6 @@ async def monzo_access_token(
         raise HTTPException(status_code=502, detail="Monzo token refresh failed") from exc
 
 
-@router.get("/accounts", response_model=AccountsResponse)
-async def accounts(
-    account_type: str | None = None,
-    access_token: str = Depends(monzo_access_token),
-) -> AccountsResponse | Response:
-    return await _validate_response(
-        get_accounts(access_token, account_type),
-        AccountsResponse,
-        operation="accounts",
-    )
-
-
 @router.get(
     "/accounts-with-balances",
     response_model=AccountsWithBalancesResponse,
@@ -122,7 +110,7 @@ async def accounts_with_balances(
 ) -> AccountsWithBalancesResponse | Response:
     accounts_response = await _validate_response(
         get_accounts(access_token, account_type),
-        AccountsResponse,
+        MonzoAccountsResponse,
         operation="accounts",
     )
     if isinstance(accounts_response, Response):
