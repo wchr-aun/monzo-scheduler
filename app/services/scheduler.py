@@ -2,10 +2,14 @@
 
 from datetime import datetime, timedelta, timezone
 
+from app.observability import get_logger
+
+logger = get_logger(__name__)
+
 
 def log_task(message: str) -> None:
     """Placeholder job function; replace with a pot transfer operation."""
-    print(f"Task executed! Message: {message}, Time: {datetime.now(timezone.utc).isoformat()}")
+    logger.info("scheduled_task_executed task_type=message message=%r", message)
 
 
 def schedule_message(scheduler, message: str):

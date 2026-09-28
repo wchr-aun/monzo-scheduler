@@ -1,0 +1,296 @@
+import logging
+from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs
+
+import httpx
+import jwt
+import pytest
+import respx
+
+from app.db.models import MonzoCredential
+
+
+def _session_token(settings, user_id="user_test123"):
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {"sub": user_id, "iat": now, "exp": now + timedelta(hours=1)},
+        settings.jwt_secret_key,
+        algorithm="HS256",
+    )
+
+
+def _save_credential(client, *, expired=False):
+    now = datetime.now(timezone.utc)
+    with client.app.state.session_factory() as session:
+        session.add(
+            MonzoCredential(
+                user_id="user_test123",
+                access_token="test-access-token",
+                refresh_token="test-refresh-token",
+                token_type="Bearer",
+                expires_at=now + timedelta(hours=-1 if expired else 1),
+                updated_at=now,
+            )
+        )
+        session.commit()
+
+
+@pytest.mark.parametrize(
+    ("path", "upstream_url", "upstream_body", "expected_query"),
+    [
+        (
+            "/accounts?account_type=uk_retail",
+            "https://api.monzo.com/accounts",
+            {
+                "accounts": [
+                    {
+                        "id": "acc_123",
+                        "description": "Personal Account",
+                        "created": "2015-11-13T12:17:42Z",
+                    }
+                ]
+            },
+            {"account_type": "uk_retail"},
+        ),
+        (
+            "/balance?account_id=acc_123",
+            "https://api.monzo.com/balance",
+            {
+                "balance": 5000,
+                "total_balance": 6000,
+                "currency": "GBP",
+                "spend_today": 100,
+            },
+            {"account_id": "acc_123"},
+        ),
+        (
+            "/pots?current_account_id=acc_123",
+            "https://api.monzo.com/pots",
+            {
+                "pots": [
+                    {
+                        "id": "pot_123",
+                        "name": "Savings",
+                        "style": "beach_ball",
+                        "balance": 133700,
+                        "currency": "GBP",
+                        "created": "2017-11-09T12:30:53.695Z",
+                        "updated": "2017-11-09T12:30:53.695Z",
+                        "deleted": False,
+                    }
+                ]
+            },
+            {"current_account_id": "acc_123"},
+        ),
+    ],
+)
+def test_resource_routes_pass_through_monzo_responses(
+    client,
+    settings,
+    path,
+    upstream_url,
+    upstream_body,
+    expected_query,
+):
+    _save_credential(client)
+    with respx.mock(assert_all_called=True) as monzo_mock:
+        upstream = monzo_mock.get(upstream_url).mock(
+            return_value=httpx.Response(200, json=upstream_body)
+        )
+        response = client.get(
+            path,
+            headers={"Authorization": f"Bearer {_session_token(settings)}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == upstream_body
+    assert upstream.calls.last.request.headers["Authorization"] == (
+        "Bearer test-access-token"
+    )
+    assert dict(upstream.calls.last.request.url.params) == expected_query
+
+
+def test_accounts_surfaces_monzo_error_in_response_and_logs(client, settings, caplog):
+    _save_credential(client)
+    caplog.set_level(logging.WARNING)
+    with respx.mock(assert_all_called=True) as monzo_mock:
+        monzo_mock.get("https://api.monzo.com/accounts").mock(
+            return_value=httpx.Response(
+                403,
+                json={"code": "forbidden", "message": "User approval required"},
+            )
+        )
+        response = client.get(
+            "/accounts",
+            headers={"Authorization": f"Bearer {_session_token(settings)}"},
+        )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "code": "forbidden",
+        "message": "User approval required",
+    }
+    assert "monzo_request_failed operation=accounts upstream_status=403" in caplog.text
+    assert "monzo_code='forbidden'" in caplog.text
+    assert "monzo_message='User approval required'" in caplog.text
+
+
+def test_accounts_passes_through_unapproved_monzo_access(client, settings, caplog):
+    _save_credential(client)
+    caplog.set_level(logging.WARNING)
+    with respx.mock(assert_all_called=True) as monzo_mock:
+        monzo_mock.get("https://api.monzo.com/accounts").mock(
+            return_value=httpx.Response(
+                403,
+                json={
+                    "code": "forbidden",
+                    "message": "Access forbidden due to insufficient permissions.",
+                },
+            )
+        )
+        response = client.get(
+            "/accounts",
+            headers={"Authorization": f"Bearer {_session_token(settings)}"},
+        )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "code": "forbidden",
+        "message": "Access forbidden due to insufficient permissions.",
+    }
+    assert "monzo_code='forbidden'" in caplog.text
+    assert "monzo_message='Access forbidden due to insufficient permissions.'" in caplog.text
+
+
+def test_accounts_only_returns_fields_in_service_schema(client, settings):
+    _save_credential(client)
+    with respx.mock(assert_all_called=True) as monzo_mock:
+        monzo_mock.get("https://api.monzo.com/accounts").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "accounts": [
+                        {
+                            "id": "acc_123",
+                            "description": "Personal Account",
+                            "created": "2015-11-13T12:17:42Z",
+                            "new_monzo_field": "not exposed",
+                        }
+                    ],
+                    "new_top_level_field": "not exposed",
+                },
+            )
+        )
+        response = client.get(
+            "/accounts",
+            headers={"Authorization": f"Bearer {_session_token(settings)}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "accounts": [
+            {
+                "id": "acc_123",
+                "description": "Personal Account",
+                "created": "2015-11-13T12:17:42Z",
+            }
+        ]
+    }
+
+
+def test_accounts_rejects_invalid_monzo_response(client, settings, caplog):
+    _save_credential(client)
+    caplog.set_level(logging.ERROR)
+    with respx.mock(assert_all_called=True) as monzo_mock:
+        monzo_mock.get("https://api.monzo.com/accounts").mock(
+            return_value=httpx.Response(200, json={"accounts": [{"id": "acc_123"}]})
+        )
+        response = client.get(
+            "/accounts",
+            headers={"Authorization": f"Bearer {_session_token(settings)}"},
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Monzo returned an invalid response"}
+    assert "schema_errors=accounts.0.description:missing" in caplog.text
+
+
+def test_expired_access_token_is_refreshed_and_saved(client, settings):
+    _save_credential(client, expired=True)
+    with respx.mock(assert_all_called=True) as monzo_mock:
+        refresh = monzo_mock.post("https://api.monzo.com/oauth2/token").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "access_token": "new-access-token",
+                    "refresh_token": "new-refresh-token",
+                    "token_type": "Bearer",
+                    "expires_in": 21600,
+                    "user_id": "user_test123",
+                },
+            )
+        )
+        accounts = monzo_mock.get("https://api.monzo.com/accounts").mock(
+            return_value=httpx.Response(200, json={"accounts": []})
+        )
+        response = client.get(
+            "/accounts",
+            headers={"Authorization": f"Bearer {_session_token(settings)}"},
+        )
+
+    assert response.status_code == 200
+    assert accounts.calls.last.request.headers["Authorization"] == (
+        "Bearer new-access-token"
+    )
+    assert parse_qs(refresh.calls.last.request.content.decode()) == {
+        "grant_type": ["refresh_token"],
+        "client_id": [settings.monzo_client_id],
+        "client_secret": [settings.monzo_client_secret],
+        "refresh_token": ["test-refresh-token"],
+    }
+    with client.app.state.session_factory() as session:
+        credential = session.get(MonzoCredential, "user_test123")
+        assert credential.access_token == "new-access-token"
+        assert credential.refresh_token == "new-refresh-token"
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected_detail"),
+    [
+        ({}, "Bearer token required"),
+        ({"Authorization": "Bearer invalid"}, "Invalid or expired bearer token"),
+    ],
+)
+def test_accounts_requires_valid_application_jwt(client, headers, expected_detail):
+    response = client.get("/accounts", headers=headers)
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
+    assert response.json()["detail"] == expected_detail
+
+
+def test_accounts_rejects_jwt_without_stored_credentials(client, settings):
+    response = client.get(
+        "/accounts",
+        headers={"Authorization": f"Bearer {_session_token(settings)}"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Monzo connection is missing or expired"
+
+
+def test_authentication_failure_is_traceable_without_logging_token(client, caplog):
+    bearer_token = "sensitive-invalid-jwt"
+    caplog.set_level(logging.WARNING)
+
+    response = client.get(
+        "/accounts",
+        headers={"Authorization": f"Bearer {bearer_token}"},
+    )
+
+    request_id = response.headers["x-request-id"]
+    assert response.status_code == 401
+    assert "authentication_failed path=/accounts reason=invalid_or_expired_jwt" in caplog.text
+    assert f"request_id={request_id}" in caplog.text
+    assert "status_code=401" in caplog.text
+    assert bearer_token not in caplog.text

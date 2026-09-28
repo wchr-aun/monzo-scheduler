@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
 
@@ -23,9 +24,10 @@ def test_schedule_message_registers_one_shot_job():
     assert returned_job is job
 
 
-def test_log_task_prints_message_and_utc_time(capsys):
+def test_log_task_records_message(caplog):
+    caplog.set_level(logging.INFO, logger="monzo_scheduler.app.services.scheduler")
+
     log_task("scheduled")
 
-    output = capsys.readouterr().out
-    assert "Task executed! Message: scheduled, Time:" in output
-    assert "+00:00" in output
+    assert "scheduled_task_executed" in caplog.text
+    assert "message='scheduled'" in caplog.text

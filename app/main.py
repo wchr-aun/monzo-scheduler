@@ -1,14 +1,20 @@
 from contextlib import asynccontextmanager
+from time import monotonic
+from uuid import uuid6
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from app.config import Settings
 from app.db.session import create_database_engine, create_session_factory
-from app.routers import health, monzo, tasks
+from app.observability import configure_logging, get_logger
+from app.routers import health, monzo, resources, tasks
+
+logger = get_logger(__name__)
 
 
 def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
+    configure_logging()
     settings = settings or Settings.from_environment()
 
     @asynccontextmanager
@@ -29,9 +35,44 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
                 database_engine.dispose()
 
     application = FastAPI(title="Monzo Scheduler", lifespan=lifespan)
+
+    @application.middleware("http")
+    async def log_request_failures(request: Request, call_next):
+        request_id = uuid6().hex
+        request.state.request_id = request_id
+        started_at = monotonic()
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            logger.error(
+                "request_failed request_id=%s method=%s path=%s "
+                "exception_type=%s duration_ms=%d",
+                request_id,
+                request.method,
+                request.url.path,
+                type(exc).__name__,
+                round((monotonic() - started_at) * 1000),
+            )
+            raise
+
+        response.headers["X-Request-ID"] = request_id
+        if response.status_code >= 400:
+            log = logger.error if response.status_code >= 500 else logger.warning
+            log(
+                "request_completed_with_error request_id=%s method=%s path=%s "
+                "status_code=%d duration_ms=%d",
+                request_id,
+                request.method,
+                request.url.path,
+                response.status_code,
+                round((monotonic() - started_at) * 1000),
+            )
+        return response
+
     application.include_router(health.router)
     application.include_router(tasks.router)
     application.include_router(monzo.router)
+    application.include_router(resources.router)
     return application
 
 
