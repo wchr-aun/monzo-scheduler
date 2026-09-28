@@ -1,0 +1,26 @@
+name: Deploy to DigitalOcean
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to DigitalOcean
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to DigitalOcean Droplet
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USER }}
+          key: ${{ secrets.KEY }}
+          script: |
+            set -e
+            sudo -n -u monzo-scheduler -H git -C /srv/monzo-scheduler pull --ff-only origin main
+            sudo -n -u monzo-scheduler -H /var/lib/monzo-scheduler/.local/bin/uv --directory /srv/monzo-scheduler sync --frozen --no-dev
+            sudo -n -u monzo-scheduler -H /var/lib/monzo-scheduler/.local/bin/uv --directory /srv/monzo-scheduler run --no-sync alembic upgrade head
+            sudo -n systemctl restart monzo-scheduler
+            sudo -n systemctl is-active --quiet monzo-scheduler
