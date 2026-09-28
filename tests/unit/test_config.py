@@ -7,7 +7,6 @@ SETTING_ENV_VARS = (
     "DATABASE_URL",
     "JWT_SECRET_KEY",
     "JWT_EXPIRATION_SECONDS",
-    "SESSION_COOKIE_SECURE",
 )
 
 
@@ -54,7 +53,6 @@ def test_settings_load_dotenv_file_with_environment_precedence(tmp_path, monkeyp
         "MONZO_CLIENT_SECRET=file-secret\n"
         "MONZO_REDIRECT_URI=http://localhost/callback\n"
         "JWT_EXPIRATION_SECONDS=7200\n"
-        "SESSION_COOKIE_SECURE=true\n"
     )
     monkeypatch.setattr(config, "ENV_FILE", env_file)
     clear_setting_environment(monkeypatch)
@@ -66,4 +64,3 @@ def test_settings_load_dotenv_file_with_environment_precedence(tmp_path, monkeyp
     assert settings.monzo_client_secret == "file-secret"
     assert settings.monzo_redirect_uri == "http://localhost/callback"
     assert settings.jwt_expiration_seconds == 7200
-    assert settings.session_cookie_secure is True

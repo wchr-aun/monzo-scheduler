@@ -23,7 +23,7 @@ Keep route handlers small. Put reusable business logic in services, and use Fast
 - Preserve OAuth `state` validation on the callback.
 - Do not log access tokens, client secrets, or authorization codes.
 - Monzo access and refresh tokens are stored as plain text in SQLite so services can use them directly. Avoid exposing token values in logs or responses and protect the database file and backups.
-- `JWT_SECRET_KEY` signs the HttpOnly `session` cookie. Use `SESSION_COOKIE_SECURE=true` over HTTPS.
+- `JWT_SECRET_KEY` signs the application token returned by the OAuth callback.
 - Apply schema changes with `uv run alembic upgrade head`; do not use `metadata.create_all()` in application startup.
 - The scheduler and OAuth state are currently process-local, so the prototype assumes one worker.
 

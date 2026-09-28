@@ -2,7 +2,7 @@ from uuid import uuid6
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import RedirectResponse
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -64,14 +64,7 @@ async def monzo_callback(request: Request, code: str, state: str):
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=503, detail="Token storage is unavailable") from exc
 
-    response = JSONResponse({"message": "Monzo account connected"})
-    response.set_cookie(
-        key="session",
-        value=session_token,
-        max_age=settings.jwt_expiration_seconds,
-        httponly=True,
-        secure=settings.session_cookie_secure,
-        samesite="lax",
-        path="/",
-    )
-    return response
+    return {
+        "token": session_token,
+        "expiresIn": settings.jwt_expiration_seconds,
+    }

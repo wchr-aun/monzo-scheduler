@@ -39,15 +39,13 @@ def test_oauth_redirect_and_token_exchange_happy_path(client, settings):
         )
 
     assert callback.status_code == 200
-    assert callback.json() == {"message": "Monzo account connected"}
-    set_cookie = callback.headers["set-cookie"].lower()
-    assert "httponly" in set_cookie
-    assert "samesite=lax" in set_cookie
-    assert "max-age=86400" in set_cookie
+    response_body = callback.json()
+    assert response_body["expiresIn"] == 86400
+    assert "set-cookie" not in callback.headers
     assert state not in client.app.state.oauth_states
-    cookie = client.cookies.get("session")
-    assert cookie
-    jwt_claims = jwt.decode(cookie, settings.jwt_secret_key, algorithms=["HS256"])
+    jwt_claims = jwt.decode(
+        response_body["token"], settings.jwt_secret_key, algorithms=["HS256"]
+    )
     assert jwt_claims["sub"] == "user_test123"
     assert "access_token" not in callback.text
 
