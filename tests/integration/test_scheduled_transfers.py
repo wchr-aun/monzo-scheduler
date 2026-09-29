@@ -194,52 +194,71 @@ def test_get_scheduled_transfers_lists_all_authenticated_users_transfers(
     )
 
     assert response.status_code == 200
-    assert response.json() == [
-        {
-            "setup_id": "own-active",
-            "transfer_id": "own-transfer",
-            "scheduled_for": (now + timedelta(days=1))
-            .astimezone(UK_TIMEZONE)
-            .isoformat(),
-            "interval": "weekly",
-            "type": "deposit",
-            "amount": 750,
-            "pot_id": "pot-own",
-            "account_id": "account-own",
-            "setup_status": "active",
-            "status": "pending",
-            "executed_at": None,
-        },
-        {
-            "setup_id": "own-inactive",
-            "transfer_id": "inactive-transfer",
-            "scheduled_for": (now + timedelta(days=2))
-            .astimezone(UK_TIMEZONE)
-            .isoformat(),
-            "interval": "daily",
-            "type": "withdraw",
-            "amount": 100,
-            "pot_id": "pot-inactive",
-            "account_id": "account-own",
-            "setup_status": "deactivated",
-            "status": "cancelled",
-            "executed_at": None,
-        },
-        {
-            "setup_id": "own-active-later",
-            "transfer_id": "own-transfer-later",
-            "scheduled_for": (now + timedelta(days=2))
-            .astimezone(UK_TIMEZONE)
-            .isoformat(),
-            "interval": "daily",
-            "type": "withdraw",
-            "amount": 125,
-            "pot_id": "pot-own-later",
-            "account_id": "account-own",
-            "setup_status": "active",
-            "status": "failed",
-            "executed_at": now.astimezone(UK_TIMEZONE).isoformat(),
-        },
+    assert response.json() == {
+        "items": [
+            {
+                "setup_id": "own-active",
+                "transfer_id": "own-transfer",
+                "scheduled_for": (now + timedelta(days=1))
+                .astimezone(UK_TIMEZONE)
+                .isoformat(),
+                "interval": "weekly",
+                "type": "deposit",
+                "amount": 750,
+                "pot_id": "pot-own",
+                "account_id": "account-own",
+                "setup_status": "active",
+                "status": "pending",
+                "executed_at": None,
+            },
+            {
+                "setup_id": "own-inactive",
+                "transfer_id": "inactive-transfer",
+                "scheduled_for": (now + timedelta(days=2))
+                .astimezone(UK_TIMEZONE)
+                .isoformat(),
+                "interval": "daily",
+                "type": "withdraw",
+                "amount": 100,
+                "pot_id": "pot-inactive",
+                "account_id": "account-own",
+                "setup_status": "deactivated",
+                "status": "cancelled",
+                "executed_at": None,
+            },
+            {
+                "setup_id": "own-active-later",
+                "transfer_id": "own-transfer-later",
+                "scheduled_for": (now + timedelta(days=2))
+                .astimezone(UK_TIMEZONE)
+                .isoformat(),
+                "interval": "daily",
+                "type": "withdraw",
+                "amount": 125,
+                "pot_id": "pot-own-later",
+                "account_id": "account-own",
+                "setup_status": "active",
+                "status": "failed",
+                "executed_at": now.astimezone(UK_TIMEZONE).isoformat(),
+            },
+        ],
+        "total": 3,
+        "limit": 50,
+        "offset": 0,
+    }
+
+    paginated_response = client.get(
+        "/scheduled-transfers?limit=1&offset=1",
+        headers={"Authorization": f"Bearer {_session_token(settings)}"},
+    )
+
+    assert paginated_response.status_code == 200
+    paginated_body = paginated_response.json()
+    assert paginated_body["total"] == 3
+    assert paginated_body["limit"] == 1
+    assert paginated_body["offset"] == 1
+    assert [item["transfer_id"] for item in paginated_body["items"]] == [
+        "inactive-transfer"
     ]
 
 

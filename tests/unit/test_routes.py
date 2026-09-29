@@ -13,6 +13,7 @@ from app.main import create_app
 from app.routers import monzo, tasks
 from app.routers.resources import MonzoSession, monzo_session
 from app.schemas.tasks import ScheduleTransferRequest
+from app.services.scheduler import ScheduledTransfersPage
 
 
 @contextmanager
@@ -105,36 +106,50 @@ def test_get_scheduled_transfers_calls_scheduler_service(monkeypatch, client):
     )()
     called = {}
 
-    def fake_list(session_factory, user_id):
-        called.update(session_factory=session_factory, user_id=user_id)
-        return [transfer]
+    def fake_list(session_factory, user_id, *, limit, offset):
+        called.update(
+            session_factory=session_factory,
+            user_id=user_id,
+            limit=limit,
+            offset=offset,
+        )
+        return ScheduledTransfersPage(
+            items=[transfer], total=3, limit=limit, offset=offset
+        )
 
     monkeypatch.setattr(tasks, "list_scheduled_transfers", fake_list)
     client.app.dependency_overrides[monzo_session] = lambda: MonzoSession(
         user_id="user_123", access_token="unused"
     )
 
-    response = client.get("/scheduled-transfers")
+    response = client.get("/scheduled-transfers?limit=20&offset=2")
     client.app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert response.json() == [
-        {
-            "setup_id": "setup-123",
-            "transfer_id": "transfer-123",
-            "scheduled_for": scheduled_for.isoformat().replace("+00:00", "Z"),
-            "interval": "weekly",
-            "type": "withdraw",
-            "amount": 500,
-            "pot_id": "pot-123",
-            "account_id": "account-123",
-            "setup_status": "deactivated",
-            "status": "failed",
-            "executed_at": scheduled_for.isoformat().replace("+00:00", "Z"),
-        }
-    ]
+    assert response.json() == {
+        "items": [
+            {
+                "setup_id": "setup-123",
+                "transfer_id": "transfer-123",
+                "scheduled_for": scheduled_for.isoformat().replace("+00:00", "Z"),
+                "interval": "weekly",
+                "type": "withdraw",
+                "amount": 500,
+                "pot_id": "pot-123",
+                "account_id": "account-123",
+                "setup_status": "deactivated",
+                "status": "failed",
+                "executed_at": scheduled_for.isoformat().replace("+00:00", "Z"),
+            }
+        ],
+        "total": 3,
+        "limit": 20,
+        "offset": 2,
+    }
     assert called["session_factory"] is client.app.state.session_factory
     assert called["user_id"] == "user_123"
+    assert called["limit"] == 20
+    assert called["offset"] == 2
 
 
 def test_create_task_endpoint_is_removed(client):

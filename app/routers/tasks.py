@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.routers.resources import MonzoSession, monzo_session
@@ -8,6 +10,7 @@ from app.schemas.tasks import (
     ScheduleTransferRequest,
     ScheduleTransferResponse,
     ScheduledTransferResponse,
+    ScheduledTransfersPageResponse,
 )
 from app.services.scheduler import (
     InvalidScheduleError,
@@ -22,16 +25,20 @@ router = APIRouter(tags=["tasks"])
 
 @router.get(
     "/scheduled-transfers",
-    response_model=list[ScheduledTransferResponse],
+    response_model=ScheduledTransfersPageResponse,
 )
 def get_scheduled_transfers(
     request: Request,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
     authentication: MonzoSession = Depends(monzo_session),
-) -> list[ScheduledTransferResponse]:
+) -> ScheduledTransfersPageResponse:
     try:
-        transfers = list_scheduled_transfers(
+        page = list_scheduled_transfers(
             request.app.state.session_factory,
             authentication.user_id,
+            limit=limit,
+            offset=offset,
         )
     except SQLAlchemyError as exc:
         raise HTTPException(
@@ -39,22 +46,27 @@ def get_scheduled_transfers(
             detail="Scheduled transfer storage is unavailable",
         ) from exc
 
-    return [
-        ScheduledTransferResponse(
-            setup_id=transfer.setup_id,
-            transfer_id=transfer.transfer_id,
-            scheduled_for=transfer.scheduled_for,
-            interval=transfer.interval,
-            type=transfer.transfer_type,
-            amount=transfer.amount,
-            pot_id=transfer.pot_id,
-            account_id=transfer.account_id,
-            setup_status=transfer.setup_status,
-            status=transfer.status,
-            executed_at=transfer.executed_at,
-        )
-        for transfer in transfers
-    ]
+    return ScheduledTransfersPageResponse(
+        items=[
+            ScheduledTransferResponse(
+                setup_id=transfer.setup_id,
+                transfer_id=transfer.transfer_id,
+                scheduled_for=transfer.scheduled_for,
+                interval=transfer.interval,
+                type=transfer.transfer_type,
+                amount=transfer.amount,
+                pot_id=transfer.pot_id,
+                account_id=transfer.account_id,
+                setup_status=transfer.setup_status,
+                status=transfer.status,
+                executed_at=transfer.executed_at,
+            )
+            for transfer in page.items
+        ],
+        total=page.total,
+        limit=page.limit,
+        offset=page.offset,
+    )
 
 
 @router.post("/schedule-transfer", response_model=ScheduleTransferResponse)

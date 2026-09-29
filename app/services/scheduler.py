@@ -10,7 +10,7 @@ from uuid import uuid6
 from apscheduler.job import Job
 from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -62,12 +62,32 @@ class ScheduledTransferDetails:
     executed_at: datetime | None
 
 
+@dataclass(frozen=True)
+class ScheduledTransfersPage:
+    items: list[ScheduledTransferDetails]
+    total: int
+    limit: int
+    offset: int
+
+
 def list_scheduled_transfers(
     session_factory: sessionmaker[Session],
     user_id: str,
-) -> list[ScheduledTransferDetails]:
-    """Return all of the authenticated user's transfers."""
+    *,
+    limit: int,
+    offset: int,
+) -> ScheduledTransfersPage:
+    """Return a page containing all of the authenticated user's transfers."""
     with session_factory() as session:
+        total = session.scalar(
+            select(func.count())
+            .select_from(ScheduledTransfer)
+            .join(
+                ScheduledTransferSetup,
+                ScheduledTransfer.setup_id == ScheduledTransferSetup.setup_id,
+            )
+            .where(ScheduledTransferSetup.user_id == user_id)
+        )
         rows = session.execute(
             select(ScheduledTransfer, ScheduledTransferSetup)
             .join(
@@ -79,28 +99,37 @@ def list_scheduled_transfers(
                 ScheduledTransfer.scheduled_for,
                 ScheduledTransfer.transfer_id,
             )
+            .limit(limit)
+            .offset(offset)
         ).all()
 
-        return [
-            ScheduledTransferDetails(
-                setup_id=setup.setup_id,
-                transfer_id=transfer.transfer_id,
-                scheduled_for=_as_utc(transfer.scheduled_for).astimezone(UK_TIMEZONE),
-                interval=setup.interval,
-                transfer_type=setup.transfer_type,
-                amount=setup.amount,
-                pot_id=setup.pot_id,
-                account_id=setup.account_id,
-                setup_status=setup.status,
-                status=transfer.status,
-                executed_at=(
-                    _as_utc(transfer.executed_at).astimezone(UK_TIMEZONE)
-                    if transfer.executed_at is not None
-                    else None
-                ),
-            )
-            for transfer, setup in rows
-        ]
+        return ScheduledTransfersPage(
+            items=[
+                ScheduledTransferDetails(
+                    setup_id=setup.setup_id,
+                    transfer_id=transfer.transfer_id,
+                    scheduled_for=_as_utc(transfer.scheduled_for).astimezone(
+                        UK_TIMEZONE
+                    ),
+                    interval=setup.interval,
+                    transfer_type=setup.transfer_type,
+                    amount=setup.amount,
+                    pot_id=setup.pot_id,
+                    account_id=setup.account_id,
+                    setup_status=setup.status,
+                    status=transfer.status,
+                    executed_at=(
+                        _as_utc(transfer.executed_at).astimezone(UK_TIMEZONE)
+                        if transfer.executed_at is not None
+                        else None
+                    ),
+                )
+                for transfer, setup in rows
+            ],
+            total=total or 0,
+            limit=limit,
+            offset=offset,
+        )
 
 
 def schedule_transfer(

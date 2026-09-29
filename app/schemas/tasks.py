@@ -63,6 +63,13 @@ class ScheduledTransferResponse(BaseModel):
     executed_at: DateTime | None
 
 
+class ScheduledTransfersPageResponse(BaseModel):
+    items: list[ScheduledTransferResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 class CancelTransferResponse(BaseModel):
     setup_id: str
     status: str = "deactivated"
