@@ -85,6 +85,33 @@ def test_monthly_occurrence_handles_other_short_months_and_year_boundaries():
     )
 
 
+@pytest.mark.parametrize(
+    ("previous_local", "expected_local", "expected_utc"),
+    [
+        (
+            datetime(2030, 3, 30, 9, 15, tzinfo=UK_TIMEZONE),
+            datetime(2030, 3, 31, 9, 15, tzinfo=UK_TIMEZONE),
+            datetime(2030, 3, 31, 8, 15, tzinfo=timezone.utc),
+        ),
+        (
+            datetime(2030, 10, 26, 9, 15, tzinfo=UK_TIMEZONE),
+            datetime(2030, 10, 27, 9, 15, tzinfo=UK_TIMEZONE),
+            datetime(2030, 10, 27, 9, 15, tzinfo=timezone.utc),
+        ),
+    ],
+)
+def test_daily_occurrence_preserves_uk_local_time_across_dst_changes(
+    previous_local, expected_local, expected_utc
+):
+    setup = _monthly_setup(30)
+    setup.interval = "daily"
+
+    occurrence = _next_occurrence(setup, previous_local)
+
+    assert occurrence == expected_utc
+    assert occurrence.astimezone(UK_TIMEZONE) == expected_local
+
+
 def test_schedule_transfer_persists_setup_and_pending_occurrence(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'scheduler.db'}")
     Base.metadata.create_all(engine)
