@@ -163,6 +163,7 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
                     transfer_id="own-transfer",
                     setup_id="own-active",
                     scheduled_for=now + timedelta(days=1),
+                    created_at=now,
                     status="pending",
                 ),
                 ScheduledTransfer(
@@ -175,6 +176,7 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
                     transfer_id="own-transfer-later",
                     setup_id="own-active-later",
                     scheduled_for=now + timedelta(days=2),
+                    created_at=now - timedelta(hours=1),
                     executed_at=now,
                     status="failed",
                 ),

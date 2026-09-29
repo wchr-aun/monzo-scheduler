@@ -102,8 +102,8 @@ def list_scheduled_transfers(
             )
             .where(*filters)
             .order_by(
-                ScheduledTransfer.scheduled_for,
-                ScheduledTransfer.transfer_id,
+                ScheduledTransfer.created_at.desc(),
+                ScheduledTransfer.transfer_id.desc(),
             )
             .limit(limit)
             .offset(offset)
