@@ -163,3 +163,52 @@ def test_schedule_transfer_persists_setup_and_pending_occurrence(tmp_path):
         assert stored_transfer.status == "cancelled"
 
     engine.dispose()
+
+
+def test_recovery_schedules_overdue_transfer_for_immediate_execution(
+    tmp_path, monkeypatch
+):
+    engine = create_engine(f"sqlite:///{tmp_path / 'scheduler.db'}")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    settings = Settings("client", "secret", "http://localhost/callback")
+    scheduled_for = datetime(2030, 1, 30, 9, 15, tzinfo=timezone.utc)
+    recovered_at = datetime(2030, 1, 30, 10, 15, tzinfo=timezone.utc)
+    setup = _monthly_setup(30)
+    transfer = ScheduledTransfer(
+        transfer_id="overdue-transfer",
+        setup_id=setup.setup_id,
+        scheduled_for=scheduled_for,
+        status="pending",
+    )
+
+    with factory() as session:
+        session.add_all([setup, transfer])
+        session.commit()
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return recovered_at if tz is None else recovered_at.astimezone(tz)
+
+    monkeypatch.setattr("app.services.scheduler.datetime", FrozenDateTime)
+    restarted_scheduler = Mock()
+
+    restored = restore_scheduled_transfers(
+        restarted_scheduler,
+        factory,
+        settings,
+    )
+
+    assert restored == 1
+    restarted_scheduler.add_job.assert_called_once_with(
+        execute_scheduled_transfer,
+        "date",
+        run_date=recovered_at,
+        args=[transfer.transfer_id, restarted_scheduler, factory, settings],
+        id=transfer.transfer_id,
+        replace_existing=True,
+        misfire_grace_time=None,
+    )
+
+    engine.dispose()
