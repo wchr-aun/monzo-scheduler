@@ -49,6 +49,9 @@ def get_scheduled_transfers(
             amount=transfer.amount,
             pot_id=transfer.pot_id,
             account_id=transfer.account_id,
+            setup_status=transfer.setup_status,
+            status=transfer.status,
+            executed_at=transfer.executed_at,
         )
         for transfer in transfers
     ]

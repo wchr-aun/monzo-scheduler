@@ -98,6 +98,9 @@ def test_get_scheduled_transfers_calls_scheduler_service(monkeypatch, client):
             "amount": 500,
             "pot_id": "pot-123",
             "account_id": "account-123",
+            "setup_status": "deactivated",
+            "status": "failed",
+            "executed_at": scheduled_for,
         },
     )()
     called = {}
@@ -125,6 +128,9 @@ def test_get_scheduled_transfers_calls_scheduler_service(monkeypatch, client):
             "amount": 500,
             "pot_id": "pot-123",
             "account_id": "account-123",
+            "setup_status": "deactivated",
+            "status": "failed",
+            "executed_at": scheduled_for.isoformat().replace("+00:00", "Z"),
         }
     ]
     assert called["session_factory"] is client.app.state.session_factory

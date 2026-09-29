@@ -58,6 +58,9 @@ class ScheduledTransferResponse(BaseModel):
     amount: int
     pot_id: str
     account_id: str
+    setup_status: str
+    status: str
+    executed_at: DateTime | None
 
 
 class CancelTransferResponse(BaseModel):

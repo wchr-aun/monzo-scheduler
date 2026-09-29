@@ -57,13 +57,16 @@ class ScheduledTransferDetails:
     amount: int
     pot_id: str
     account_id: str
+    setup_status: str
+    status: str
+    executed_at: datetime | None
 
 
 def list_scheduled_transfers(
     session_factory: sessionmaker[Session],
     user_id: str,
 ) -> list[ScheduledTransferDetails]:
-    """Return the authenticated user's active, pending transfer schedules."""
+    """Return all of the authenticated user's transfers."""
     with session_factory() as session:
         rows = session.execute(
             select(ScheduledTransfer, ScheduledTransferSetup)
@@ -71,11 +74,7 @@ def list_scheduled_transfers(
                 ScheduledTransferSetup,
                 ScheduledTransfer.setup_id == ScheduledTransferSetup.setup_id,
             )
-            .where(
-                ScheduledTransferSetup.user_id == user_id,
-                ScheduledTransferSetup.status == "active",
-                ScheduledTransfer.status == "pending",
-            )
+            .where(ScheduledTransferSetup.user_id == user_id)
             .order_by(
                 ScheduledTransfer.scheduled_for,
                 ScheduledTransfer.transfer_id,
@@ -92,6 +91,13 @@ def list_scheduled_transfers(
                 amount=setup.amount,
                 pot_id=setup.pot_id,
                 account_id=setup.account_id,
+                setup_status=setup.status,
+                status=transfer.status,
+                executed_at=(
+                    _as_utc(transfer.executed_at).astimezone(UK_TIMEZONE)
+                    if transfer.executed_at is not None
+                    else None
+                ),
             )
             for transfer, setup in rows
         ]

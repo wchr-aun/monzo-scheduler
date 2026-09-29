@@ -89,7 +89,7 @@ def test_schedule_transfer_endpoint_persists_authenticated_users_task(
         assert transfer.executed_at is None
 
 
-def test_get_scheduled_transfers_lists_only_authenticated_users_active_schedules(
+def test_get_scheduled_transfers_lists_all_authenticated_users_transfers(
     client, settings
 ):
     _save_credential(client)
@@ -175,7 +175,8 @@ def test_get_scheduled_transfers_lists_only_authenticated_users_active_schedules
                     transfer_id="own-transfer-later",
                     setup_id="own-active-later",
                     scheduled_for=now + timedelta(days=2),
-                    status="pending",
+                    executed_at=now,
+                    status="failed",
                 ),
                 ScheduledTransfer(
                     transfer_id="other-transfer",
@@ -205,6 +206,24 @@ def test_get_scheduled_transfers_lists_only_authenticated_users_active_schedules
             "amount": 750,
             "pot_id": "pot-own",
             "account_id": "account-own",
+            "setup_status": "active",
+            "status": "pending",
+            "executed_at": None,
+        },
+        {
+            "setup_id": "own-inactive",
+            "transfer_id": "inactive-transfer",
+            "scheduled_for": (now + timedelta(days=2))
+            .astimezone(UK_TIMEZONE)
+            .isoformat(),
+            "interval": "daily",
+            "type": "withdraw",
+            "amount": 100,
+            "pot_id": "pot-inactive",
+            "account_id": "account-own",
+            "setup_status": "deactivated",
+            "status": "cancelled",
+            "executed_at": None,
         },
         {
             "setup_id": "own-active-later",
@@ -217,7 +236,10 @@ def test_get_scheduled_transfers_lists_only_authenticated_users_active_schedules
             "amount": 125,
             "pot_id": "pot-own-later",
             "account_id": "account-own",
-        }
+            "setup_status": "active",
+            "status": "failed",
+            "executed_at": now.astimezone(UK_TIMEZONE).isoformat(),
+        },
     ]
 
 
