@@ -106,10 +106,11 @@ def test_get_scheduled_transfers_calls_scheduler_service(monkeypatch, client):
     )()
     called = {}
 
-    def fake_list(session_factory, user_id, *, limit, offset):
+    def fake_list(session_factory, user_id, *, statuses, limit, offset):
         called.update(
             session_factory=session_factory,
             user_id=user_id,
+            statuses=statuses,
             limit=limit,
             offset=offset,
         )
@@ -148,8 +149,43 @@ def test_get_scheduled_transfers_calls_scheduler_service(monkeypatch, client):
     }
     assert called["session_factory"] is client.app.state.session_factory
     assert called["user_id"] == "user_123"
+    assert [status.value for status in called["statuses"]] == [
+        "pending",
+        "completed",
+        "failed",
+    ]
     assert called["limit"] == 20
     assert called["offset"] == 2
+
+
+def test_get_scheduled_transfers_passes_status_filter(monkeypatch, client):
+    called = {}
+
+    def fake_list(session_factory, user_id, *, statuses, limit, offset):
+        called["statuses"] = statuses
+        return ScheduledTransfersPage(items=[], total=0, limit=limit, offset=offset)
+
+    monkeypatch.setattr(tasks, "list_scheduled_transfers", fake_list)
+    client.app.dependency_overrides[monzo_session] = lambda: MonzoSession(
+        user_id="user_123", access_token="unused"
+    )
+
+    response = client.get("/scheduled-transfers?status=pending,failed,pending")
+    client.app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert [status.value for status in called["statuses"]] == ["pending", "failed"]
+
+
+def test_get_scheduled_transfers_rejects_invalid_status(client):
+    client.app.dependency_overrides[monzo_session] = lambda: MonzoSession(
+        user_id="user_123", access_token="unused"
+    )
+
+    response = client.get("/scheduled-transfers?status=unknown")
+    client.app.dependency_overrides.clear()
+
+    assert response.status_code == 422
 
 
 def test_create_task_endpoint_is_removed(client):

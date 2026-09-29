@@ -89,7 +89,7 @@ def test_schedule_transfer_endpoint_persists_authenticated_users_task(
         assert transfer.executed_at is None
 
 
-def test_get_scheduled_transfers_lists_all_authenticated_users_transfers(
+def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
     client, settings
 ):
     _save_credential(client)
@@ -212,21 +212,6 @@ def test_get_scheduled_transfers_lists_all_authenticated_users_transfers(
                 "executed_at": None,
             },
             {
-                "setup_id": "own-inactive",
-                "transfer_id": "inactive-transfer",
-                "scheduled_for": (now + timedelta(days=2))
-                .astimezone(UK_TIMEZONE)
-                .isoformat(),
-                "interval": "daily",
-                "type": "withdraw",
-                "amount": 100,
-                "pot_id": "pot-inactive",
-                "account_id": "account-own",
-                "setup_status": "deactivated",
-                "status": "cancelled",
-                "executed_at": None,
-            },
-            {
                 "setup_id": "own-active-later",
                 "transfer_id": "own-transfer-later",
                 "scheduled_for": (now + timedelta(days=2))
@@ -242,7 +227,7 @@ def test_get_scheduled_transfers_lists_all_authenticated_users_transfers(
                 "executed_at": now.astimezone(UK_TIMEZONE).isoformat(),
             },
         ],
-        "total": 3,
+        "total": 2,
         "limit": 50,
         "offset": 0,
     }
@@ -254,10 +239,22 @@ def test_get_scheduled_transfers_lists_all_authenticated_users_transfers(
 
     assert paginated_response.status_code == 200
     paginated_body = paginated_response.json()
-    assert paginated_body["total"] == 3
+    assert paginated_body["total"] == 2
     assert paginated_body["limit"] == 1
     assert paginated_body["offset"] == 1
     assert [item["transfer_id"] for item in paginated_body["items"]] == [
+        "own-transfer-later"
+    ]
+
+    filtered_response = client.get(
+        "/scheduled-transfers?status=cancelled",
+        headers={"Authorization": f"Bearer {_session_token(settings)}"},
+    )
+
+    assert filtered_response.status_code == 200
+    filtered_body = filtered_response.json()
+    assert filtered_body["total"] == 1
+    assert [item["transfer_id"] for item in filtered_body["items"]] == [
         "inactive-transfer"
     ]
 

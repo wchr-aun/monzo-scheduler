@@ -18,6 +18,13 @@ class TransferType(StrEnum):
     WITHDRAW = "withdraw"
 
 
+class TransferStatus(StrEnum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
 class ScheduleTransferRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

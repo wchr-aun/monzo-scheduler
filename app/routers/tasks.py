@@ -11,6 +11,7 @@ from app.schemas.tasks import (
     ScheduleTransferResponse,
     ScheduledTransferResponse,
     ScheduledTransfersPageResponse,
+    TransferStatus,
 )
 from app.services.scheduler import (
     InvalidScheduleError,
@@ -22,6 +23,32 @@ from app.services.scheduler import (
 
 router = APIRouter(tags=["tasks"])
 
+DEFAULT_TRANSFER_STATUSES = (
+    TransferStatus.PENDING,
+    TransferStatus.COMPLETED,
+    TransferStatus.FAILED,
+)
+
+
+def _parse_transfer_statuses(value: str | None) -> tuple[TransferStatus, ...]:
+    if value is None:
+        return DEFAULT_TRANSFER_STATUSES
+
+    try:
+        statuses = tuple(
+            TransferStatus(status.strip()) for status in value.split(",")
+        )
+    except ValueError as exc:
+        allowed = ", ".join(status.value for status in TransferStatus)
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid transfer status. Allowed values: {allowed}",
+        ) from exc
+
+    if not statuses:
+        raise HTTPException(status_code=422, detail="At least one status is required")
+    return tuple(dict.fromkeys(statuses))
+
 
 @router.get(
     "/scheduled-transfers",
@@ -29,14 +56,20 @@ router = APIRouter(tags=["tasks"])
 )
 def get_scheduled_transfers(
     request: Request,
+    status: Annotated[
+        str | None,
+        Query(description="Comma-separated transfer statuses"),
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     authentication: MonzoSession = Depends(monzo_session),
 ) -> ScheduledTransfersPageResponse:
+    statuses = _parse_transfer_statuses(status)
     try:
         page = list_scheduled_transfers(
             request.app.state.session_factory,
             authentication.user_id,
+            statuses=statuses,
             limit=limit,
             offset=offset,
         )

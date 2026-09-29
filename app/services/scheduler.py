@@ -21,6 +21,7 @@ from app.schemas.tasks import (
     UK_TIMEZONE,
     ScheduleTransferRequest,
     TransferInterval,
+    TransferStatus,
     TransferType,
 )
 from app.services.authorization import resolve_monzo_access_token
@@ -74,11 +75,16 @@ def list_scheduled_transfers(
     session_factory: sessionmaker[Session],
     user_id: str,
     *,
+    statuses: tuple[TransferStatus, ...],
     limit: int,
     offset: int,
 ) -> ScheduledTransfersPage:
-    """Return a page containing all of the authenticated user's transfers."""
+    """Return a filtered page of the authenticated user's transfers."""
     with session_factory() as session:
+        filters = (
+            ScheduledTransferSetup.user_id == user_id,
+            ScheduledTransfer.status.in_(statuses),
+        )
         total = session.scalar(
             select(func.count())
             .select_from(ScheduledTransfer)
@@ -86,7 +92,7 @@ def list_scheduled_transfers(
                 ScheduledTransferSetup,
                 ScheduledTransfer.setup_id == ScheduledTransferSetup.setup_id,
             )
-            .where(ScheduledTransferSetup.user_id == user_id)
+            .where(*filters)
         )
         rows = session.execute(
             select(ScheduledTransfer, ScheduledTransferSetup)
@@ -94,7 +100,7 @@ def list_scheduled_transfers(
                 ScheduledTransferSetup,
                 ScheduledTransfer.setup_id == ScheduledTransferSetup.setup_id,
             )
-            .where(ScheduledTransferSetup.user_id == user_id)
+            .where(*filters)
             .order_by(
                 ScheduledTransfer.scheduled_for,
                 ScheduledTransfer.transfer_id,
