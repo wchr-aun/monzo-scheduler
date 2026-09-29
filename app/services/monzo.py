@@ -84,6 +84,42 @@ async def get_pots(access_token: str, current_account_id: str) -> httpx.Response
     )
 
 
+async def deposit_into_pot(
+    access_token: str,
+    pot_id: str,
+    account_id: str,
+    amount: int,
+    dedupe_id: str,
+) -> httpx.Response:
+    return await _put(
+        f"/pots/{pot_id}/deposit",
+        access_token,
+        data={
+            "source_account_id": account_id,
+            "amount": str(amount),
+            "dedupe_id": dedupe_id,
+        },
+    )
+
+
+async def withdraw_from_pot(
+    access_token: str,
+    pot_id: str,
+    account_id: str,
+    amount: int,
+    dedupe_id: str,
+) -> httpx.Response:
+    return await _put(
+        f"/pots/{pot_id}/withdraw",
+        access_token,
+        data={
+            "destination_account_id": account_id,
+            "amount": str(amount),
+            "dedupe_id": dedupe_id,
+        },
+    )
+
+
 async def _get(
     path: str, access_token: str, *, params: dict[str, str] | None = None
 ) -> httpx.Response:
@@ -91,5 +127,16 @@ async def _get(
         return await client.get(
             f"{MONZO_API_URL}{path}",
             params=params,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+
+async def _put(
+    path: str, access_token: str, *, data: dict[str, str]
+) -> httpx.Response:
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        return await client.put(
+            f"{MONZO_API_URL}{path}",
+            data=data,
             headers={"Authorization": f"Bearer {access_token}"},
         )

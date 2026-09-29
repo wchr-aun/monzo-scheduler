@@ -1,6 +1,7 @@
 """Authenticated pass-through routes for Monzo account resources."""
 
 from collections.abc import Awaitable
+from dataclasses import dataclass
 from typing import Literal, Never, TypeVar
 
 import httpx
@@ -41,10 +42,16 @@ ResponseValueT = TypeVar("ResponseValueT")
 MonzoOperation = Literal["accounts", "balance", "pots"]
 
 
-async def monzo_access_token(
+@dataclass(frozen=True)
+class MonzoSession:
+    user_id: str
+    access_token: str
+
+
+async def monzo_session(
     request: Request,
     authorization: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> str:
+) -> MonzoSession:
     if authorization is None:
         logger.warning(
             "authentication_failed path=%s reason=bearer_token_missing",
@@ -57,11 +64,12 @@ async def monzo_access_token(
             authorization.credentials,
             request.app.state.settings,
         )
-        return await resolve_monzo_access_token(
+        access_token = await resolve_monzo_access_token(
             user_id,
             request.app.state.session_factory,
             request.app.state.settings,
         )
+        return MonzoSession(user_id=user_id, access_token=access_token)
     except SessionAuthenticationError:
         logger.warning(
             "authentication_failed path=%s reason=invalid_or_expired_jwt",
@@ -98,6 +106,12 @@ async def monzo_access_token(
         raise HTTPException(status_code=503, detail="Monzo API is unreachable") from exc
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=502, detail="Monzo token refresh failed") from exc
+
+
+async def monzo_access_token(
+    authentication: MonzoSession = Depends(monzo_session),
+) -> str:
+    return authentication.access_token
 
 
 @router.get(

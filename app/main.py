@@ -9,6 +9,7 @@ from app.config import Settings
 from app.db.session import create_database_engine, create_session_factory
 from app.observability import configure_logging, get_logger
 from app.routers import health, monzo, resources, tasks
+from app.services.scheduler import restore_scheduled_transfers
 
 logger = get_logger(__name__)
 
@@ -20,12 +21,14 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         database_engine = engine or create_database_engine(settings.database_url)
+        session_factory = create_session_factory(database_engine)
         scheduler = BackgroundScheduler(timezone="UTC")
+        restore_scheduled_transfers(scheduler, session_factory, settings)
         scheduler.start()
         application.state.scheduler = scheduler
         application.state.settings = settings
         application.state.database_engine = database_engine
-        application.state.session_factory = create_session_factory(database_engine)
+        application.state.session_factory = session_factory
         application.state.oauth_states = set()
         try:
             yield

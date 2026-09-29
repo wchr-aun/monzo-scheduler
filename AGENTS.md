@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is a Python 3.14+ FastAPI service for a Monzo savings-pot scheduler. The current scheduled task only logs a message; do not describe or treat it as a completed money transfer.
+This is a Python 3.14+ FastAPI service for scheduling Monzo savings-pot deposits and withdrawals.
 
 ## Structure
 

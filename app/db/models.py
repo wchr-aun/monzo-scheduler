@@ -1,6 +1,15 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from uuid import uuid6
 
-from sqlalchemy import DateTime, String
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    SmallInteger,
+    String,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -15,7 +24,88 @@ class MonzoCredential(Base):
     access_token: Mapped[str] = mapped_column(String, nullable=False)
     refresh_token: Mapped[str | None] = mapped_column(String, nullable=True)
     token_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
     )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
+class ScheduledTransferSetup(Base):
+    __tablename__ = "scheduled_transfer_setups"
+    __table_args__ = (
+        CheckConstraint(
+            "interval IN ('daily', 'weekly', 'monthly')",
+            name="ck_scheduled_transfer_setups_interval",
+        ),
+        CheckConstraint(
+            "type IN ('withdraw', 'deposit')",
+            name="ck_scheduled_transfer_setups_type",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'deactivated')",
+            name="ck_scheduled_transfer_setups_status",
+        ),
+        CheckConstraint(
+            "hour BETWEEN 0 AND 23", name="ck_scheduled_transfer_setups_hour"
+        ),
+        CheckConstraint(
+            "minute BETWEEN 0 AND 59", name="ck_scheduled_transfer_setups_minute"
+        ),
+        CheckConstraint(
+            "amount > 0", name="ck_scheduled_transfer_setups_amount"
+        ),
+    )
+
+    setup_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid6())
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("monzo_credentials.user_id"), nullable=False, index=True
+    )
+    scheduled_date: Mapped[date] = mapped_column("date", Date, nullable=False)
+    hour: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    minute: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    interval: Mapped[str] = mapped_column(String(16), nullable=False)
+    transfer_type: Mapped[str] = mapped_column("type", String(16), nullable=False)
+    amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    pot_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    account_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
+class ScheduledTransfer(Base):
+    __tablename__ = "scheduled_transfers"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'completed', 'failed', 'cancelled')",
+            name="ck_scheduled_transfers_status",
+        ),
+    )
+
+    transfer_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid6())
+    )
+    setup_id: Mapped[str] = mapped_column(
+        ForeignKey("scheduled_transfer_setups.setup_id"), nullable=False, index=True
+    )
+    scheduled_for: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    executed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
