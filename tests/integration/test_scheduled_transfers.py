@@ -268,14 +268,38 @@ def test_get_scheduled_transfers_requires_authentication(client):
 
 
 @pytest.mark.parametrize(
-    ("transfer_type", "path", "account_field"),
+    (
+        "transfer_type",
+        "path",
+        "account_field",
+        "feed_action",
+        "past_tense_action",
+    ),
     [
-        ("deposit", "/pots/pot_123/deposit", "source_account_id"),
-        ("withdraw", "/pots/pot_123/withdraw", "destination_account_id"),
+        (
+            "deposit",
+            "/pots/pot_123/deposit",
+            "source_account_id",
+            "deposit",
+            "deposited",
+        ),
+        (
+            "withdraw",
+            "/pots/pot_123/withdraw",
+            "destination_account_id",
+            "withdrawal",
+            "withdrawn",
+        ),
     ],
 )
 def test_scheduled_transfer_uses_monzo_pot_api_form_fields(
-    client, settings, transfer_type, path, account_field
+    client,
+    settings,
+    transfer_type,
+    path,
+    account_field,
+    feed_action,
+    past_tense_action,
 ):
     _save_credential(client)
     setup_id = f"setup-{transfer_type}"
@@ -310,6 +334,9 @@ def test_scheduled_transfer_uses_monzo_pot_api_form_fields(
         transfer = monzo_mock.put(f"https://api.monzo.com{path}").mock(
             return_value=httpx.Response(200, json={})
         )
+        feed = monzo_mock.post("https://api.monzo.com/feed").mock(
+            return_value=httpx.Response(200, json={})
+        )
         execute_scheduled_transfer(
             transfer_id,
             client.app.state.scheduler,
@@ -324,6 +351,25 @@ def test_scheduled_transfer_uses_monzo_pot_api_form_fields(
     assert form[account_field] == ["acc_123"]
     assert form["amount"] == ["1250"]
     assert form["dedupe_id"] == [transfer_id]
+    assert feed.calls.last.request.headers["Authorization"] == (
+        "Bearer test-access-token"
+    )
+    feed_form = parse_qs(feed.calls.last.request.content.decode())
+    assert feed_form == {
+        "account_id": ["acc_123"],
+        "type": ["basic"],
+        "url": [
+            "https://monzo-scheduler-ui.vercel.app/account/acc_123/pot/pot_123"
+        ],
+        "params[title]": [f"🎉 £12.50 was {past_tense_action}!"],
+        "params[image_url]": [
+            "https://raw.githubusercontent.com/wchr-aun/monzo-scheduler-ui/"
+            "refs/heads/main/public/logo.png"
+        ],
+        "params[body]": [
+            f"The scheduled {feed_action} of £12.50 was successful."
+        ],
+    }
 
     with client.app.state.session_factory() as session:
         completed = session.get(ScheduledTransfer, transfer_id)
@@ -415,6 +461,9 @@ def test_failed_occurrence_is_recorded_and_next_occurrence_is_pending(
                 json={"code": "internal_service_error", "message": "Try again"},
             )
         )
+        feed = monzo_mock.post("https://api.monzo.com/feed").mock(
+            return_value=httpx.Response(200, json={})
+        )
         with pytest.raises(httpx.HTTPStatusError):
             execute_scheduled_transfer(
                 transfer_id,
@@ -422,6 +471,12 @@ def test_failed_occurrence_is_recorded_and_next_occurrence_is_pending(
                 client.app.state.session_factory,
                 settings,
             )
+
+    feed_form = parse_qs(feed.calls.last.request.content.decode())
+    assert feed_form["params[title]"] == ["❌ £12.50 deposit failed!"]
+    assert feed_form["params[body]"] == [
+        "The scheduled deposit of £12.50 failed."
+    ]
 
     with client.app.state.session_factory() as session:
         transfers = session.query(ScheduledTransfer).filter_by(setup_id=setup_id).all()
@@ -464,6 +519,9 @@ def test_three_executions_leave_three_completed_and_one_pending(client, settings
 
     with respx.mock(assert_all_called=True) as monzo_mock:
         monzo_mock.put("https://api.monzo.com/pots/pot_123/deposit").mock(
+            return_value=httpx.Response(200, json={})
+        )
+        monzo_mock.post("https://api.monzo.com/feed").mock(
             return_value=httpx.Response(200, json={})
         )
         for _ in range(3):

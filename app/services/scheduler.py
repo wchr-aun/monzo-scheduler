@@ -5,6 +5,7 @@ import calendar
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal
+from urllib.parse import quote
 from uuid import uuid6
 
 from apscheduler.job import Job
@@ -25,9 +26,15 @@ from app.schemas.tasks import (
     TransferType,
 )
 from app.services.authorization import resolve_monzo_access_token
-from app.services.monzo import deposit_into_pot, withdraw_from_pot
+from app.services.monzo import create_feed_item, deposit_into_pot, withdraw_from_pot
 
 logger = get_logger(__name__)
+
+FEED_IMAGE_URL = (
+    "https://raw.githubusercontent.com/wchr-aun/monzo-scheduler-ui/"
+    "refs/heads/main/public/logo.png"
+)
+SCHEDULER_UI_URL = "https://monzo-scheduler-ui.vercel.app"
 
 
 class InvalidScheduleError(ValueError):
@@ -296,6 +303,7 @@ async def _execute_scheduled_transfer(
     if values is None:
         return
 
+    access_token: str | None = None
     try:
         access_token = await resolve_monzo_access_token(
             values.user_id, session_factory, settings
@@ -336,6 +344,13 @@ async def _execute_scheduled_transfer(
             session_factory,
             settings,
         )
+        if access_token is not None:
+            await _notify_transfer_result(
+                access_token,
+                values,
+                transfer_id,
+                succeeded=False,
+            )
         raise
 
     _finalize_occurrence(
@@ -345,7 +360,66 @@ async def _execute_scheduled_transfer(
         session_factory,
         settings,
     )
+    await _notify_transfer_result(
+        access_token,
+        values,
+        transfer_id,
+        succeeded=True,
+    )
     logger.info("scheduled_transfer_completed transfer_id=%s", transfer_id)
+
+
+async def _notify_transfer_result(
+    access_token: str,
+    values: TransferExecution,
+    transfer_id: str,
+    *,
+    succeeded: bool,
+) -> None:
+    is_deposit = values.transfer_type == TransferType.DEPOSIT.value
+    action = "deposit" if is_deposit else "withdrawal"
+    past_tense_action = "deposited" if is_deposit else "withdrawn"
+    amount = _format_gbp(values.amount)
+    if succeeded:
+        title = f"🎉 {amount} was {past_tense_action}!"
+        body = f"The scheduled {action} of {amount} was successful."
+    else:
+        title = f"❌ {amount} {action} failed!"
+        body = f"The scheduled {action} of {amount} failed."
+
+    account_id = quote(values.account_id, safe="")
+    pot_id = quote(values.pot_id, safe="")
+    try:
+        response = await create_feed_item(
+            access_token,
+            values.account_id,
+            title=title,
+            image_url=FEED_IMAGE_URL,
+            body=body,
+            url=f"{SCHEDULER_UI_URL}/account/{account_id}/pot/{pot_id}",
+        )
+        if response.is_error:
+            error_code, error_message = monzo_error_details(response)
+            logger.warning(
+                "scheduled_transfer_feed_rejected transfer_id=%s "
+                "upstream_status=%d monzo_code=%r monzo_message=%r",
+                transfer_id,
+                response.status_code,
+                error_code,
+                error_message,
+            )
+        response.raise_for_status()
+    except Exception:
+        logger.warning(
+            "scheduled_transfer_feed_failed transfer_id=%s",
+            transfer_id,
+            exc_info=True,
+        )
+
+
+def _format_gbp(amount: int) -> str:
+    pounds, pence = divmod(amount, 100)
+    return f"£{pounds:,}.{pence:02d}"
 
 
 def _load_pending_execution(

@@ -120,6 +120,30 @@ async def withdraw_from_pot(
     )
 
 
+async def create_feed_item(
+    access_token: str,
+    account_id: str,
+    *,
+    title: str,
+    image_url: str,
+    body: str,
+    url: str,
+) -> httpx.Response:
+    """Create a basic item in the account's Monzo feed."""
+    return await _post(
+        "/feed",
+        access_token,
+        data={
+            "account_id": account_id,
+            "type": "basic",
+            "url": url,
+            "params[title]": title,
+            "params[image_url]": image_url,
+            "params[body]": body,
+        },
+    )
+
+
 async def _get(
     path: str, access_token: str, *, params: dict[str, str] | None = None
 ) -> httpx.Response:
@@ -127,6 +151,17 @@ async def _get(
         return await client.get(
             f"{MONZO_API_URL}{path}",
             params=params,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+
+async def _post(
+    path: str, access_token: str, *, data: dict[str, str]
+) -> httpx.Response:
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        return await client.post(
+            f"{MONZO_API_URL}{path}",
+            data=data,
             headers={"Authorization": f"Bearer {access_token}"},
         )
 
