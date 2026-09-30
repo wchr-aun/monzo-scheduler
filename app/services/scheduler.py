@@ -8,6 +8,7 @@ from typing import Literal
 from urllib.parse import quote
 from uuid import uuid6
 
+import httpx
 from apscheduler.job import Job
 from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -79,12 +80,12 @@ class ScheduledTransfersPage:
 
 
 def list_scheduled_transfers(
-    session_factory: sessionmaker[Session],
-    user_id: str,
-    *,
-    statuses: tuple[TransferStatus, ...],
-    limit: int,
-    offset: int,
+        session_factory: sessionmaker[Session],
+        user_id: str,
+        *,
+        statuses: tuple[TransferStatus, ...],
+        limit: int,
+        offset: int,
 ) -> ScheduledTransfersPage:
     """Return a filtered page of the authenticated user's transfers."""
     with session_factory() as session:
@@ -146,13 +147,13 @@ def list_scheduled_transfers(
 
 
 def schedule_transfer(
-    scheduler: BackgroundScheduler,
-    session_factory: sessionmaker[Session],
-    settings: Settings,
-    user_id: str,
-    request: ScheduleTransferRequest,
-    *,
-    now: datetime | None = None,
+        scheduler: BackgroundScheduler,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        user_id: str,
+        request: ScheduleTransferRequest,
+        *,
+        now: datetime | None = None,
 ) -> tuple[ScheduledTransferSetup, ScheduledTransfer, Job]:
     scheduled_at = request.datetime.astimezone(UK_TIMEZONE)
     current_time = (now or datetime.now(timezone.utc)).astimezone(UK_TIMEZONE)
@@ -201,10 +202,10 @@ def schedule_transfer(
 
 
 def cancel_scheduled_transfer(
-    scheduler: BackgroundScheduler,
-    session_factory: sessionmaker[Session],
-    user_id: str,
-    setup_id: str,
+        scheduler: BackgroundScheduler,
+        session_factory: sessionmaker[Session],
+        user_id: str,
+        setup_id: str,
 ) -> ScheduledTransferSetup:
     with session_factory() as session:
         setup = session.get(ScheduledTransferSetup, setup_id)
@@ -228,9 +229,9 @@ def cancel_scheduled_transfer(
 
 
 def restore_scheduled_transfers(
-    scheduler: BackgroundScheduler,
-    session_factory: sessionmaker[Session],
-    settings: Settings,
+        scheduler: BackgroundScheduler,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
 ) -> int:
     """Restore pending occurrences, cancelling any from inactive setups."""
     with session_factory() as session:
@@ -269,10 +270,10 @@ def restore_scheduled_transfers(
 
 
 def execute_scheduled_transfer(
-    transfer_id: str,
-    scheduler: BackgroundScheduler,
-    session_factory: sessionmaker[Session],
-    settings: Settings,
+        transfer_id: str,
+        scheduler: BackgroundScheduler,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
 ) -> None:
     """Execute one occurrence and create its setup's next occurrence."""
     try:
@@ -294,10 +295,10 @@ def execute_scheduled_transfer(
 
 
 async def _execute_scheduled_transfer(
-    transfer_id: str,
-    scheduler: BackgroundScheduler,
-    session_factory: sessionmaker[Session],
-    settings: Settings,
+        transfer_id: str,
+        scheduler: BackgroundScheduler,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
 ) -> None:
     values = _load_pending_execution(transfer_id, session_factory)
     if values is None:
@@ -365,27 +366,30 @@ async def _execute_scheduled_transfer(
         values,
         transfer_id,
         succeeded=True,
+        pot_name=_pot_name(response),
     )
     logger.info("scheduled_transfer_completed transfer_id=%s", transfer_id)
 
 
 async def _notify_transfer_result(
-    access_token: str,
-    values: TransferExecution,
-    transfer_id: str,
-    *,
-    succeeded: bool,
+        access_token: str,
+        values: TransferExecution,
+        transfer_id: str,
+        *,
+        succeeded: bool,
+        pot_name: str | None = None,
 ) -> None:
     is_deposit = values.transfer_type == TransferType.DEPOSIT.value
     action = "deposit" if is_deposit else "withdrawal"
     past_tense_action = "deposited" if is_deposit else "withdrawn"
     amount = _format_gbp(values.amount)
     if succeeded:
-        title = f"🎉 {amount} was {past_tense_action}!"
-        body = f"The scheduled {action} of {amount} was successful."
+        preposition = "to" if is_deposit else "from"
+        destination = f" {preposition} {pot_name}" if pot_name else ""
+        title = f"🎉 {amount} was {past_tense_action}{destination}!"
     else:
         title = f"❌ {amount} {action} failed!"
-        body = f"The scheduled {action} of {amount} failed."
+    body = "Scheduled by Monzo Scheduler"
 
     account_id = quote(values.account_id, safe="")
     pot_id = quote(values.pot_id, safe="")
@@ -422,9 +426,20 @@ def _format_gbp(amount: int) -> str:
     return f"£{pounds:,}.{pence:02d}"
 
 
+def _pot_name(response: httpx.Response) -> str | None:
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    name = payload.get("name")
+    return name if isinstance(name, str) and name else None
+
+
 def _load_pending_execution(
-    transfer_id: str,
-    session_factory: sessionmaker[Session],
+        transfer_id: str,
+        session_factory: sessionmaker[Session],
 ) -> TransferExecution | None:
     try:
         with session_factory() as session:
@@ -458,11 +473,11 @@ def _load_pending_execution(
 
 
 def _finalize_occurrence(
-    transfer_id: str,
-    status: Literal["completed", "failed"],
-    scheduler: BackgroundScheduler,
-    session_factory: sessionmaker[Session],
-    settings: Settings,
+        transfer_id: str,
+        status: Literal["completed", "failed"],
+        scheduler: BackgroundScheduler,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
 ) -> None:
     next_transfer: ScheduledTransfer | None = None
     next_job: Job | None = None
@@ -508,7 +523,7 @@ def _finalize_occurrence(
 
 
 def _next_occurrence(
-    setup: ScheduledTransferSetup, previous_scheduled_for: datetime
+        setup: ScheduledTransferSetup, previous_scheduled_for: datetime
 ) -> datetime:
     previous = _as_utc(previous_scheduled_for).astimezone(UK_TIMEZONE)
     if setup.interval == TransferInterval.DAILY.value:
@@ -535,13 +550,13 @@ def _next_month(previous: date, requested_day: int) -> date:
 
 
 def _add_transfer_job(
-    scheduler: BackgroundScheduler,
-    transfer: ScheduledTransfer,
-    session_factory: sessionmaker[Session],
-    settings: Settings,
-    *,
-    replace_existing: bool,
-    run_at: datetime | None = None,
+        scheduler: BackgroundScheduler,
+        transfer: ScheduledTransfer,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        *,
+        replace_existing: bool,
+        run_at: datetime | None = None,
 ) -> Job:
     return scheduler.add_job(
         execute_scheduled_transfer,
@@ -555,7 +570,7 @@ def _add_transfer_job(
 
 
 def _remove_job_if_present(
-    scheduler: BackgroundScheduler, transfer_id: str
+        scheduler: BackgroundScheduler, transfer_id: str
 ) -> None:
     try:
         scheduler.remove_job(transfer_id)

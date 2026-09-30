@@ -272,23 +272,23 @@ def test_get_scheduled_transfers_requires_authentication(client):
         "transfer_type",
         "path",
         "account_field",
-        "feed_action",
         "past_tense_action",
+        "preposition",
     ),
     [
         (
             "deposit",
             "/pots/pot_123/deposit",
             "source_account_id",
-            "deposit",
             "deposited",
+            "to",
         ),
         (
             "withdraw",
             "/pots/pot_123/withdraw",
             "destination_account_id",
-            "withdrawal",
             "withdrawn",
+            "from",
         ),
     ],
 )
@@ -298,8 +298,8 @@ def test_scheduled_transfer_uses_monzo_pot_api_form_fields(
     transfer_type,
     path,
     account_field,
-    feed_action,
     past_tense_action,
+    preposition,
 ):
     _save_credential(client)
     setup_id = f"setup-{transfer_type}"
@@ -332,7 +332,7 @@ def test_scheduled_transfer_uses_monzo_pot_api_form_fields(
 
     with respx.mock(assert_all_called=True) as monzo_mock:
         transfer = monzo_mock.put(f"https://api.monzo.com{path}").mock(
-            return_value=httpx.Response(200, json={})
+            return_value=httpx.Response(200, json={"name": "Rainy Day"})
         )
         feed = monzo_mock.post("https://api.monzo.com/feed").mock(
             return_value=httpx.Response(200, json={})
@@ -361,14 +361,14 @@ def test_scheduled_transfer_uses_monzo_pot_api_form_fields(
         "url": [
             "https://monzo-scheduler-ui.vercel.app/account/acc_123/pot/pot_123"
         ],
-        "params[title]": [f"🎉 £12.50 was {past_tense_action}!"],
+        "params[title]": [
+            f"🎉 £12.50 was {past_tense_action} {preposition} Rainy Day!"
+        ],
         "params[image_url]": [
             "https://raw.githubusercontent.com/wchr-aun/monzo-scheduler-ui/"
             "refs/heads/main/public/logo.png"
         ],
-        "params[body]": [
-            f"The scheduled {feed_action} of £12.50 was successful."
-        ],
+        "params[body]": ["Scheduled by Monzo Scheduler."],
     }
 
     with client.app.state.session_factory() as session:
@@ -474,9 +474,7 @@ def test_failed_occurrence_is_recorded_and_next_occurrence_is_pending(
 
     feed_form = parse_qs(feed.calls.last.request.content.decode())
     assert feed_form["params[title]"] == ["❌ £12.50 deposit failed!"]
-    assert feed_form["params[body]"] == [
-        "The scheduled deposit of £12.50 failed."
-    ]
+    assert feed_form["params[body]"] == ["Scheduled by Monzo Scheduler."]
 
     with client.app.state.session_factory() as session:
         transfers = session.query(ScheduledTransfer).filter_by(setup_id=setup_id).all()
