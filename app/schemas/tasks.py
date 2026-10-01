@@ -49,13 +49,6 @@ class ScheduleTransferRequest(BaseModel):
         return uk_value
 
 
-class ScheduleTransferResponse(BaseModel):
-    status: str = "scheduled"
-    setup_id: str
-    transfer_id: str
-    next_run_at: DateTime
-
-
 class ScheduledTransferResponse(BaseModel):
     setup_id: str
     transfer_id: str
@@ -64,8 +57,6 @@ class ScheduledTransferResponse(BaseModel):
     interval: TransferInterval
     type: TransferType
     amount: int
-    pot_id: str
-    account_id: str
     setup_status: str
     status: str
     executed_at: DateTime | None
@@ -76,8 +67,3 @@ class ScheduledTransfersPageResponse(BaseModel):
     total: int
     limit: int
     offset: int
-
-
-class CancelTransferResponse(BaseModel):
-    setup_id: str
-    status: str = "deactivated"

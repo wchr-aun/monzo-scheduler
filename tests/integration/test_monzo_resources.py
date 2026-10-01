@@ -36,7 +36,7 @@ def _save_credential(client, *, expired=False):
 
 
 @pytest.mark.parametrize(
-    ("path", "upstream_url", "upstream_body", "expected_query"),
+    ("path", "upstream_url", "upstream_body", "expected_body", "expected_query"),
     [
         (
             "/balance?account_id=acc_123",
@@ -47,6 +47,7 @@ def _save_credential(client, *, expired=False):
                 "currency": "GBP",
                 "spend_today": 100,
             },
+            {"balance": 5000, "total_balance": 6000, "currency": "GBP"},
             {"account_id": "acc_123"},
         ),
         (
@@ -66,6 +67,17 @@ def _save_credential(client, *, expired=False):
                     }
                 ]
             },
+            {
+                "pots": [
+                    {
+                        "id": "pot_123",
+                        "name": "Savings",
+                        "balance": 133700,
+                        "currency": "GBP",
+                        "deleted": False,
+                    }
+                ]
+            },
             {"current_account_id": "acc_123"},
         ),
     ],
@@ -76,6 +88,7 @@ def test_resource_routes_pass_through_monzo_responses(
     path,
     upstream_url,
     upstream_body,
+    expected_body,
     expected_query,
 ):
     _save_credential(client)
@@ -89,7 +102,7 @@ def test_resource_routes_pass_through_monzo_responses(
         )
 
     assert response.status_code == 200
-    assert response.json() == upstream_body
+    assert response.json() == expected_body
     assert upstream.calls.last.request.headers["Authorization"] == (
         "Bearer test-access-token"
     )
@@ -146,8 +159,13 @@ def test_accounts_with_balances_include_details_for_each_account(client, setting
     assert response.json() == {
         "accounts": [
             {
-                **account,
-                "balance_details": balances[account["id"]],
+                "id": account["id"],
+                "description": account["description"],
+                "balance_details": {
+                    "balance": balances[account["id"]]["balance"],
+                    "total_balance": balances[account["id"]]["total_balance"],
+                    "currency": balances[account["id"]]["currency"],
+                },
             }
             for account in accounts_body["accounts"]
         ]
@@ -265,12 +283,10 @@ def test_accounts_with_balances_only_returns_fields_in_service_schema(
             {
                 "id": "acc_123",
                 "description": "Personal Account",
-                "created": "2015-11-13T12:17:42Z",
                 "balance_details": {
                     "balance": 5000,
                     "total_balance": 6000,
                     "currency": "GBP",
-                    "spend_today": 100,
                 },
             }
         ]
@@ -324,13 +340,11 @@ def test_accounts_with_balances_tolerates_all_balance_requests_failing(
             {
                 "id": "acc_123",
                 "description": "Personal Account",
-                "created": "2015-11-13T12:17:42Z",
                 "balance_details": None,
             },
             {
                 "id": "acc_456",
                 "description": "Joint Account",
-                "created": "2020-06-01T08:00:00Z",
                 "balance_details": None,
             },
         ]

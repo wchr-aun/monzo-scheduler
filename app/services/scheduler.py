@@ -65,8 +65,6 @@ class ScheduledTransferDetails:
     interval: TransferInterval
     transfer_type: TransferType
     amount: int
-    pot_id: str
-    account_id: str
     setup_status: str
     status: str
     executed_at: datetime | None
@@ -87,13 +85,19 @@ def list_scheduled_transfers(
         statuses: tuple[TransferStatus, ...],
         limit: int,
         offset: int,
+        account_id: str | None = None,
+        pot_id: str | None = None,
 ) -> ScheduledTransfersPage:
     """Return a filtered page of the authenticated user's transfers."""
     with session_factory() as session:
-        filters = (
+        filters = [
             ScheduledTransferSetup.user_id == user_id,
             ScheduledTransfer.status.in_(statuses),
-        )
+        ]
+        if account_id is not None:
+            filters.append(ScheduledTransferSetup.account_id == account_id)
+        if pot_id is not None:
+            filters.append(ScheduledTransferSetup.pot_id == pot_id)
         total = session.scalar(
             select(func.count())
             .select_from(ScheduledTransfer)
@@ -130,8 +134,6 @@ def list_scheduled_transfers(
                     interval=TransferInterval(setup.interval),
                     transfer_type=TransferType(setup.transfer_type),
                     amount=setup.amount,
-                    pot_id=setup.pot_id,
-                    account_id=setup.account_id,
                     setup_status=setup.status,
                     status=transfer.status,
                     executed_at=(

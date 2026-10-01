@@ -64,10 +64,16 @@ def test_schedule_transfer_endpoint_persists_authenticated_users_task(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "scheduled"
+    assert body["status"] == "pending"
     assert UUID(body["setup_id"]).version == 6
     assert UUID(body["transfer_id"]).version == 6
-    assert datetime.fromisoformat(body["next_run_at"]) == scheduled_at
+    assert datetime.fromisoformat(body["scheduled_for"]) == scheduled_at
+    assert datetime.fromisoformat(body["created_at"]).tzinfo is not None
+    assert body["interval"] == "monthly"
+    assert body["type"] == "deposit"
+    assert body["amount"] == 1250
+    assert body["setup_status"] == "active"
+    assert body["executed_at"] is None
 
     with client.app.state.session_factory() as session:
         setup = session.get(ScheduledTransferSetup, body["setup_id"])
@@ -208,8 +214,6 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
                 "interval": "weekly",
                 "type": "deposit",
                 "amount": 750,
-                "pot_id": "pot-own",
-                "account_id": "account-own",
                 "setup_status": "active",
                 "status": "pending",
                 "executed_at": None,
@@ -226,8 +230,6 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
                 "interval": "daily",
                 "type": "withdraw",
                 "amount": 125,
-                "pot_id": "pot-own-later",
-                "account_id": "account-own",
                 "setup_status": "active",
                 "status": "failed",
                 "executed_at": now.astimezone(UK_TIMEZONE).isoformat(),
@@ -263,6 +265,58 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
     assert [item["transfer_id"] for item in filtered_body["items"]] == [
         "inactive-transfer"
     ]
+
+    account_filtered_response = client.get(
+        "/scheduled-transfers",
+        params={"status": "cancelled", "account_id": "missing-account"},
+        headers={"Authorization": f"Bearer {_session_token(settings)}"},
+    )
+
+    assert account_filtered_response.status_code == 200
+    assert account_filtered_response.json()["total"] == 0
+
+    pot_filtered_response = client.get(
+        "/scheduled-transfers",
+        params={"pot_id": "pot-own"},
+        headers={"Authorization": f"Bearer {_session_token(settings)}"},
+    )
+
+    assert pot_filtered_response.status_code == 200
+    pot_filtered_body = pot_filtered_response.json()
+    assert pot_filtered_body["total"] == 1
+    assert [item["transfer_id"] for item in pot_filtered_body["items"]] == [
+        "own-transfer"
+    ]
+
+    resource_filtered_response = client.get(
+        "/scheduled-transfers",
+        params={"account_id": "account-own", "pot_id": "pot-own"},
+        headers={"Authorization": f"Bearer {_session_token(settings)}"},
+    )
+
+    assert resource_filtered_response.status_code == 200
+    resource_filtered_body = resource_filtered_response.json()
+    assert resource_filtered_body["total"] == 1
+    assert [
+        item["transfer_id"] for item in resource_filtered_body["items"]
+    ] == ["own-transfer"]
+
+    combined_filtered_response = client.get(
+        "/scheduled-transfers",
+        params={
+            "status": "cancelled",
+            "account_id": "account-own",
+            "pot_id": "pot-inactive",
+        },
+        headers={"Authorization": f"Bearer {_session_token(settings)}"},
+    )
+
+    assert combined_filtered_response.status_code == 200
+    combined_filtered_body = combined_filtered_response.json()
+    assert combined_filtered_body["total"] == 1
+    assert [
+        item["transfer_id"] for item in combined_filtered_body["items"]
+    ] == ["inactive-transfer"]
 
 
 def test_get_scheduled_transfers_requires_authentication(client):
@@ -410,11 +464,8 @@ def test_cancelling_setup_deactivates_it_and_cancels_pending_transfer(
         headers={"Authorization": f"Bearer {_session_token(settings)}"},
     )
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "setup_id": created["setup_id"],
-        "status": "deactivated",
-    }
+    assert response.status_code == 204
+    assert response.content == b""
     assert client.app.state.scheduler.get_job(created["transfer_id"]) is None
     with client.app.state.session_factory() as session:
         setup = session.get(ScheduledTransferSetup, created["setup_id"])

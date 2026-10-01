@@ -1,21 +1,4 @@
-from datetime import datetime
-from typing import Annotated
-
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, WithJsonSchema
-
-
-def _valid_timestamp(value: str) -> str:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        raise ValueError("timestamp must include a timezone")
-    return value
-
-
-Timestamp = Annotated[
-    str,
-    AfterValidator(_valid_timestamp),
-    WithJsonSchema({"type": "string", "format": "date-time"}),
-]
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class MonzoTokenResponse(BaseModel):
@@ -38,7 +21,6 @@ class Account(BaseModel):
 
     id: str = Field(min_length=1)
     description: str
-    created: Timestamp
 
 
 class BalanceResponse(BaseModel):
@@ -49,7 +31,6 @@ class BalanceResponse(BaseModel):
     balance: int = Field(strict=True)
     total_balance: int = Field(strict=True)
     currency: str = Field(min_length=3, max_length=3)
-    spend_today: int = Field(strict=True)
 
 
 class AccountWithBalance(Account):
@@ -81,11 +62,8 @@ class Pot(BaseModel):
 
     id: str = Field(min_length=1)
     name: str
-    style: str
     balance: int = Field(strict=True)
     currency: str = Field(min_length=3, max_length=3)
-    created: Timestamp
-    updated: Timestamp
     deleted: bool = Field(strict=True)
 
 
