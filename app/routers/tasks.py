@@ -55,14 +55,14 @@ def _parse_transfer_statuses(value: str | None) -> tuple[TransferStatus, ...]:
     response_model=ScheduledTransfersPageResponse,
 )
 def get_scheduled_transfers(
-    request: Request,
-    status: Annotated[
-        str | None,
-        Query(description="Comma-separated transfer statuses"),
-    ] = None,
-    limit: Annotated[int, Query(ge=1, le=100)] = 50,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    authentication: MonzoSession = Depends(monzo_session),
+        request: Request,
+        status: Annotated[
+            str | None,
+            Query(description="Comma-separated transfer statuses"),
+        ] = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        offset: Annotated[int, Query(ge=0)] = 0,
+        authentication: MonzoSession = Depends(monzo_session),
 ) -> ScheduledTransfersPageResponse:
     statuses = _parse_transfer_statuses(status)
     try:
@@ -85,6 +85,7 @@ def get_scheduled_transfers(
                 setup_id=transfer.setup_id,
                 transfer_id=transfer.transfer_id,
                 scheduled_for=transfer.scheduled_for,
+                created_at=transfer.created_at,
                 interval=transfer.interval,
                 type=transfer.transfer_type,
                 amount=transfer.amount,
@@ -104,9 +105,9 @@ def get_scheduled_transfers(
 
 @router.post("/schedule-transfer", response_model=ScheduleTransferResponse)
 def create_scheduled_transfer(
-    transfer_request: ScheduleTransferRequest,
-    request: Request,
-    authentication: MonzoSession = Depends(monzo_session),
+        transfer_request: ScheduleTransferRequest,
+        request: Request,
+        authentication: MonzoSession = Depends(monzo_session),
 ) -> ScheduleTransferResponse:
     try:
         setup, transfer, job = schedule_transfer(
@@ -136,9 +137,9 @@ def create_scheduled_transfer(
     response_model=CancelTransferResponse,
 )
 def cancel_transfer_schedule(
-    setup_id: str,
-    request: Request,
-    authentication: MonzoSession = Depends(monzo_session),
+        setup_id: str,
+        request: Request,
+        authentication: MonzoSession = Depends(monzo_session),
 ) -> CancelTransferResponse:
     try:
         setup = cancel_scheduled_transfer(

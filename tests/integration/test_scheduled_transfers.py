@@ -204,6 +204,7 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
                 "scheduled_for": (now + timedelta(days=1))
                 .astimezone(UK_TIMEZONE)
                 .isoformat(),
+                "created_at": now.astimezone(UK_TIMEZONE).isoformat(),
                 "interval": "weekly",
                 "type": "deposit",
                 "amount": 750,
@@ -217,6 +218,9 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
                 "setup_id": "own-active-later",
                 "transfer_id": "own-transfer-later",
                 "scheduled_for": (now + timedelta(days=2))
+                .astimezone(UK_TIMEZONE)
+                .isoformat(),
+                "created_at": (now - timedelta(hours=1))
                 .astimezone(UK_TIMEZONE)
                 .isoformat(),
                 "interval": "daily",

@@ -60,6 +60,7 @@ class ScheduledTransferResponse(BaseModel):
     setup_id: str
     transfer_id: str
     scheduled_for: DateTime
+    created_at: DateTime
     interval: TransferInterval
     type: TransferType
     amount: int

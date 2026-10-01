@@ -61,8 +61,9 @@ class ScheduledTransferDetails:
     setup_id: str
     transfer_id: str
     scheduled_for: datetime
-    interval: str
-    transfer_type: str
+    created_at: datetime
+    interval: TransferInterval
+    transfer_type: TransferType
     amount: int
     pot_id: str
     account_id: str
@@ -125,8 +126,9 @@ def list_scheduled_transfers(
                     scheduled_for=_as_utc(transfer.scheduled_for).astimezone(
                         UK_TIMEZONE
                     ),
-                    interval=setup.interval,
-                    transfer_type=setup.transfer_type,
+                    created_at=_as_utc(transfer.created_at).astimezone(UK_TIMEZONE),
+                    interval=TransferInterval(setup.interval),
+                    transfer_type=TransferType(setup.transfer_type),
                     amount=setup.amount,
                     pot_id=setup.pot_id,
                     account_id=setup.account_id,
