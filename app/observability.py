@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-LOGGER_NAME = "monzo_scheduler"
+LOGGER_NAME = "schedzo"
 
 
 class QueryStringRedactionFilter(logging.Filter):

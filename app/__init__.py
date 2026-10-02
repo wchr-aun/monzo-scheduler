@@ -1,1 +1,1 @@
-"""Monzo Scheduler application package."""
+"""Schedzo application package."""

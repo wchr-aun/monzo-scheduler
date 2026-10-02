@@ -13,7 +13,7 @@ from app.services.monzo import exchange_authorization_code
 from app.services.token_store import save_monzo_tokens
 
 router = APIRouter(tags=["monzo"])
-logger = logging.getLogger("monzo_scheduler.oauth")
+logger = logging.getLogger("schedzo.oauth")
 
 
 @router.get("/monzo-redirect")

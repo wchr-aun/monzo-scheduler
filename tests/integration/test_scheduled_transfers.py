@@ -426,7 +426,7 @@ def test_scheduled_transfer_uses_monzo_pot_api_form_fields(
             "https://raw.githubusercontent.com/wchr-aun/monzo-scheduler-ui/"
             "refs/heads/main/public/logo.png"
         ],
-        "params[body]": ["Scheduled by Monzo Scheduler."],
+        "params[body]": ["Scheduled by Schedzo."],
     }
 
     with client.app.state.session_factory() as session:
@@ -529,7 +529,7 @@ def test_failed_occurrence_is_recorded_and_next_occurrence_is_pending(
 
     feed_form = parse_qs(feed.calls.last.request.content.decode())
     assert feed_form["params[title]"] == ["❌ £12.50 deposit failed!"]
-    assert feed_form["params[body]"] == ["Scheduled by Monzo Scheduler."]
+    assert feed_form["params[body]"] == ["Scheduled by Schedzo."]
 
     with client.app.state.session_factory() as session:
         transfers = session.query(ScheduledTransfer).filter_by(setup_id=setup_id).all()

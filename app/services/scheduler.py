@@ -393,7 +393,7 @@ async def _notify_transfer_result(
         title = f"🎉 {amount} was {past_tense_action}{destination}!"
     else:
         title = f"❌ {amount} {action} failed!"
-    body = "Scheduled by Monzo Scheduler"
+    body = "Scheduled by Schedzo"
 
     account_id = quote(values.account_id, safe="")
     pot_id = quote(values.pot_id, safe="")

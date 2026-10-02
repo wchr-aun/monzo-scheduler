@@ -37,7 +37,7 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
             if engine is None:
                 database_engine.dispose()
 
-    application = FastAPI(title="Monzo Scheduler", lifespan=lifespan)
+    application = FastAPI(title="Schedzo", lifespan=lifespan)
 
     @application.middleware("http")
     async def log_request_failures(request: Request, call_next):
