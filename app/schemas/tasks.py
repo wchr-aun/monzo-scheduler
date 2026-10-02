@@ -20,6 +20,7 @@ class TransferType(StrEnum):
 
 class TransferStatus(StrEnum):
     PENDING = "pending"
+    RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -32,8 +33,8 @@ class ScheduleTransferRequest(BaseModel):
     interval: TransferInterval
     type: TransferType
     amount: int = Field(strict=True, gt=0)
-    pot_id: str = Field(min_length=1)
-    account_id: str = Field(min_length=1)
+    pot_id: str = Field(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9_-]+$")
+    account_id: str = Field(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9_-]+$")
 
     @field_validator("datetime")
     @classmethod

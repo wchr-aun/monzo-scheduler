@@ -1,7 +1,9 @@
 """Monzo OAuth and API client operations."""
 
 import asyncio
+import re
 from collections.abc import Awaitable
+from urllib.parse import quote
 
 import httpx
 
@@ -9,7 +11,13 @@ from app.config import Settings
 from app.schemas.monzo import MonzoTokenResponse
 
 MONZO_API_URL = "https://api.monzo.com"
+RESOURCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,255}$")
 type BalanceResult = httpx.Response | httpx.RequestError
+
+
+def _validate_resource_id(value: str) -> None:
+    if RESOURCE_ID_PATTERN.fullmatch(value) is None:
+        raise ValueError("Invalid Monzo resource identifier")
 
 
 async def exchange_authorization_code(code: str, settings: Settings) -> MonzoTokenResponse:
@@ -91,8 +99,10 @@ async def deposit_into_pot(
     amount: int,
     dedupe_id: str,
 ) -> httpx.Response:
+    _validate_resource_id(pot_id)
+    _validate_resource_id(account_id)
     return await _put(
-        f"/pots/{pot_id}/deposit",
+        f"/pots/{quote(pot_id, safe='')}/deposit",
         access_token,
         data={
             "source_account_id": account_id,
@@ -109,8 +119,10 @@ async def withdraw_from_pot(
     amount: int,
     dedupe_id: str,
 ) -> httpx.Response:
+    _validate_resource_id(pot_id)
+    _validate_resource_id(account_id)
     return await _put(
-        f"/pots/{pot_id}/withdraw",
+        f"/pots/{quote(pot_id, safe='')}/withdraw",
         access_token,
         data={
             "destination_account_id": account_id,

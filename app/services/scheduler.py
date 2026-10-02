@@ -2,6 +2,7 @@
 
 import asyncio
 import calendar
+from threading import Lock
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal
@@ -12,12 +13,12 @@ import httpx
 from apscheduler.job import Job
 from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
-from app.db.models import ScheduledTransfer, ScheduledTransferSetup
+from app.db.models import MonzoCredential, ScheduledTransfer, ScheduledTransferSetup
 from app.observability import get_logger, monzo_error_details
 from app.schemas.tasks import (
     UK_TIMEZONE,
@@ -30,6 +31,8 @@ from app.services.authorization import resolve_monzo_access_token
 from app.services.monzo import create_feed_item, deposit_into_pot, withdraw_from_pot
 
 logger = get_logger(__name__)
+_execution_locks: dict[str, Lock] = {}
+_execution_locks_guard = Lock()
 
 FEED_IMAGE_URL = (
     "https://raw.githubusercontent.com/wchr-aun/monzo-scheduler-ui/"
@@ -44,6 +47,13 @@ class InvalidScheduleError(ValueError):
 
 class ScheduleNotFoundError(LookupError):
     """The requested setup does not exist for the authenticated user."""
+
+
+class ScheduleQuotaExceededError(ValueError):
+    """The user has reached the active schedule limit."""
+
+
+MAX_ACTIVE_SCHEDULES_PER_USER = 50
 
 
 @dataclass(frozen=True)
@@ -76,6 +86,11 @@ class ScheduledTransfersPage:
     total: int
     limit: int
     offset: int
+
+
+def _user_execution_lock(user_id: str) -> Lock:
+    with _execution_locks_guard:
+        return _execution_locks.setdefault(user_id, Lock())
 
 
 def list_scheduled_transfers(
@@ -150,7 +165,7 @@ def list_scheduled_transfers(
         )
 
 
-def schedule_transfer(
+def _schedule_transfer_unlocked(
         scheduler: BackgroundScheduler,
         session_factory: sessionmaker[Session],
         settings: Settings,
@@ -163,6 +178,16 @@ def schedule_transfer(
     current_time = (now or datetime.now(timezone.utc)).astimezone(UK_TIMEZONE)
     if scheduled_at <= current_time:
         raise InvalidScheduleError("datetime must be in the future")
+
+    with session_factory() as session:
+        active_count = session.scalar(
+            select(func.count()).select_from(ScheduledTransferSetup).where(
+                ScheduledTransferSetup.user_id == user_id,
+                ScheduledTransferSetup.status == "active",
+            )
+        )
+    if active_count >= MAX_ACTIVE_SCHEDULES_PER_USER:
+        raise ScheduleQuotaExceededError
 
     setup_id = str(uuid6())
     setup = ScheduledTransferSetup(
@@ -205,11 +230,46 @@ def schedule_transfer(
     return setup, transfer, job
 
 
+def schedule_transfer(
+    scheduler: BackgroundScheduler,
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    user_id: str,
+    request: ScheduleTransferRequest,
+    *,
+    now: datetime | None = None,
+) -> tuple[ScheduledTransferSetup, ScheduledTransfer, Job]:
+    lock = _user_execution_lock(user_id)
+    lock.acquire()
+    try:
+        return _schedule_transfer_unlocked(
+            scheduler, session_factory, settings, user_id, request, now=now
+        )
+    finally:
+        lock.release()
+
+
 def cancel_scheduled_transfer(
         scheduler: BackgroundScheduler,
         session_factory: sessionmaker[Session],
         user_id: str,
         setup_id: str,
+) -> ScheduledTransferSetup:
+    lock = _user_execution_lock(user_id)
+    lock.acquire()
+    try:
+        return _cancel_scheduled_transfer_locked(
+            scheduler, session_factory, user_id, setup_id
+        )
+    finally:
+        lock.release()
+
+
+def _cancel_scheduled_transfer_locked(
+    scheduler: BackgroundScheduler,
+    session_factory: sessionmaker[Session],
+    user_id: str,
+    setup_id: str,
 ) -> ScheduledTransferSetup:
     with session_factory() as session:
         setup = session.get(ScheduledTransferSetup, setup_id)
@@ -232,6 +292,58 @@ def cancel_scheduled_transfer(
     return setup
 
 
+def emergency_stop_user_transfers(
+    scheduler: BackgroundScheduler,
+    session_factory: sessionmaker[Session],
+    user_id: str,
+) -> int:
+    """Deactivate a user's schedules and cancel all occurrences that have not started."""
+    lock = _user_execution_lock(user_id)
+    lock.acquire()
+    try:
+        return _emergency_stop_user_transfers_locked(
+            scheduler, session_factory, user_id
+        )
+    finally:
+        lock.release()
+
+
+def _emergency_stop_user_transfers_locked(
+    scheduler: BackgroundScheduler,
+    session_factory: sessionmaker[Session],
+    user_id: str,
+) -> int:
+    with session_factory() as session:
+        setups = session.scalars(
+            select(ScheduledTransferSetup).where(
+                ScheduledTransferSetup.user_id == user_id,
+                ScheduledTransferSetup.status == "active",
+            )
+        ).all()
+        setup_ids = [setup.setup_id for setup in setups]
+        transfer_ids: list[str] = []
+        if setup_ids:
+            for setup in setups:
+                setup.status = "deactivated"
+            pending = session.scalars(
+                select(ScheduledTransfer).where(
+                    ScheduledTransfer.setup_id.in_(setup_ids),
+                    ScheduledTransfer.status == "pending",
+                )
+            ).all()
+            for transfer in pending:
+                transfer.status = "cancelled"
+                transfer_ids.append(transfer.transfer_id)
+        credential = session.get(MonzoCredential, user_id)
+        if credential is not None:
+            credential.session_version = (credential.session_version or 0) + 1
+        session.commit()
+
+    for transfer_id in transfer_ids:
+        _remove_job_if_present(scheduler, transfer_id)
+    return len(transfer_ids)
+
+
 def restore_scheduled_transfers(
         scheduler: BackgroundScheduler,
         session_factory: sessionmaker[Session],
@@ -245,11 +357,12 @@ def restore_scheduled_transfers(
                 ScheduledTransferSetup,
                 ScheduledTransfer.setup_id == ScheduledTransferSetup.setup_id,
             )
-            .where(ScheduledTransfer.status == "pending")
+            .where(ScheduledTransfer.status.in_(("pending", "running")))
         ).all()
         active_transfers: list[ScheduledTransfer] = []
         for transfer, setup in rows:
             if setup.status == "active":
+                transfer.status = "pending"
                 active_transfers.append(transfer)
             else:
                 transfer.status = "cancelled"
@@ -280,6 +393,11 @@ def execute_scheduled_transfer(
         settings: Settings,
 ) -> None:
     """Execute one occurrence and create its setup's next occurrence."""
+    user_id = _transfer_user_id(transfer_id, session_factory)
+    if user_id is None:
+        return
+    lock = _user_execution_lock(user_id)
+    lock.acquire()
     try:
         asyncio.run(
             _execute_scheduled_transfer(
@@ -289,13 +407,30 @@ def execute_scheduled_transfer(
                 settings,
             )
         )
-    except Exception:
+    except Exception as exc:
         logger.error(
-            "scheduled_transfer_failed transfer_id=%s",
+            "scheduled_transfer_failed transfer_id=%s exception_type=%s",
             transfer_id,
-            exc_info=True,
+            type(exc).__name__,
         )
         raise
+    finally:
+        lock.release()
+
+
+def _transfer_user_id(
+    transfer_id: str, session_factory: sessionmaker[Session]
+) -> str | None:
+    with session_factory() as session:
+        row = session.execute(
+            select(ScheduledTransferSetup.user_id)
+            .join(
+                ScheduledTransfer,
+                ScheduledTransfer.setup_id == ScheduledTransferSetup.setup_id,
+            )
+            .where(ScheduledTransfer.transfer_id == transfer_id)
+        ).first()
+        return row[0] if row is not None else None
 
 
 async def _execute_scheduled_transfer(
@@ -424,7 +559,6 @@ async def _notify_transfer_result(
         logger.warning(
             "scheduled_transfer_feed_failed transfer_id=%s",
             transfer_id,
-            exc_info=True,
         )
 
 
@@ -450,18 +584,30 @@ def _load_pending_execution(
 ) -> TransferExecution | None:
     try:
         with session_factory() as session:
+            claimed = session.execute(
+                update(ScheduledTransfer)
+                .where(
+                    ScheduledTransfer.transfer_id == transfer_id,
+                    ScheduledTransfer.status == "pending",
+                )
+                .values(status="running")
+            )
+            if claimed.rowcount != 1:
+                session.rollback()
+                return None
             transfer = session.get(ScheduledTransfer, transfer_id)
             if transfer is None:
                 raise LookupError(f"Scheduled transfer {transfer_id} does not exist")
             setup = session.get(ScheduledTransferSetup, transfer.setup_id)
             if setup is None:
                 raise LookupError(f"Setup {transfer.setup_id} does not exist")
-            if transfer.status != "pending":
+            if transfer.status != "running":
                 return None
             if setup.status != "active":
                 transfer.status = "cancelled"
                 session.commit()
                 return None
+            session.commit()
             return TransferExecution(
                 setup_id=setup.setup_id,
                 user_id=setup.user_id,
@@ -470,11 +616,11 @@ def _load_pending_execution(
                 pot_id=setup.pot_id,
                 account_id=setup.account_id,
             )
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
         logger.error(
-            "scheduled_transfer_storage_failed transfer_id=%s",
+            "scheduled_transfer_storage_failed transfer_id=%s exception_type=%s",
             transfer_id,
-            exc_info=True,
+            type(exc).__name__,
         )
         raise
 

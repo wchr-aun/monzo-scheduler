@@ -11,7 +11,8 @@ from fastapi import (
 )
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.routers.resources import MonzoSession, monzo_session
+from app.routers.resources import MonzoSession, authenticated_user_id, monzo_session
+from app.db.models import MonzoCredential
 from app.schemas.tasks import (
     UK_TIMEZONE,
     ScheduleTransferRequest,
@@ -22,7 +23,9 @@ from app.schemas.tasks import (
 from app.services.scheduler import (
     InvalidScheduleError,
     ScheduleNotFoundError,
+    ScheduleQuotaExceededError,
     cancel_scheduled_transfer,
+    emergency_stop_user_transfers,
     list_scheduled_transfers,
     schedule_transfer,
 )
@@ -31,9 +34,44 @@ router = APIRouter(tags=["tasks"])
 
 DEFAULT_TRANSFER_STATUSES = (
     TransferStatus.PENDING,
+    TransferStatus.RUNNING,
     TransferStatus.COMPLETED,
     TransferStatus.FAILED,
 )
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(
+    request: Request,
+    user_id: str = Depends(authenticated_user_id),
+) -> Response:
+    try:
+        with request.app.state.session_factory() as session:
+            credential = session.get(MonzoCredential, user_id)
+            if credential is not None:
+                credential.session_version += 1
+                session.commit()
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=503, detail="Session storage is unavailable") from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/emergency-stop", status_code=status.HTTP_204_NO_CONTENT)
+def emergency_stop(
+    request: Request,
+    user_id: str = Depends(authenticated_user_id),
+) -> Response:
+    try:
+        emergency_stop_user_transfers(
+            request.app.state.scheduler,
+            request.app.state.session_factory,
+            user_id,
+        )
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503, detail="Scheduled transfer storage is unavailable"
+        ) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def _parse_transfer_statuses(value: str | None) -> tuple[TransferStatus, ...]:
@@ -127,6 +165,8 @@ def create_scheduled_transfer(
         )
     except InvalidScheduleError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ScheduleQuotaExceededError as exc:
+        raise HTTPException(status_code=429, detail="Active schedule limit reached") from exc
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=503,

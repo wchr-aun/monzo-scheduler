@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Base, MonzoCredential
 from app.schemas.monzo import MonzoTokenResponse
 from app.services.token_store import save_monzo_tokens
+from app.services.token_store import decrypt_token
 
 
 @pytest.mark.parametrize(
@@ -67,5 +68,6 @@ def test_save_tokens_supports_optional_refresh_token(settings):
         saved = session.get(MonzoCredential, "user-1")
         assert signed_token
         assert saved.refresh_token is None
-        assert saved.access_token == "access"
+        assert saved.access_token != "access"
+        assert decrypt_token(saved.access_token, settings) == "access"
     engine.dispose()

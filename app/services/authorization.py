@@ -1,6 +1,8 @@
 """Application JWT validation and Monzo access-token resolution."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
+from threading import Lock
 
 import httpx
 import jwt
@@ -11,8 +13,11 @@ from app.config import Settings
 from app.db.models import MonzoCredential
 from app.observability import get_logger, monzo_error_details
 from app.services.monzo import refresh_access_token
+from app.services.token_store import decrypt_token, encrypt_token
 
 logger = get_logger(__name__)
+_refresh_locks: dict[str, Lock] = {}
+_refresh_locks_guard = Lock()
 
 
 class SessionAuthenticationError(Exception):
@@ -31,7 +36,7 @@ class MonzoTokenResponseError(Exception):
     """Monzo returned an unusable token response."""
 
 
-def decode_user_id(token: str, settings: Settings) -> str:
+def decode_user_id(token: str, settings: Settings, session_factory) -> str:
     if not settings.jwt_secret_key:
         raise TokenStorageError("Session signing is not configured")
 
@@ -40,7 +45,7 @@ def decode_user_id(token: str, settings: Settings) -> str:
             token,
             settings.jwt_secret_key,
             algorithms=["HS256"],
-            options={"require": ["sub", "exp"]},
+            options={"require": ["sub", "exp", "ver"]},
         )
     except jwt.InvalidTokenError as exc:
         raise SessionAuthenticationError from exc
@@ -48,6 +53,13 @@ def decode_user_id(token: str, settings: Settings) -> str:
     user_id = claims["sub"]
     if not isinstance(user_id, str) or not user_id:
         raise SessionAuthenticationError
+    try:
+        with session_factory() as session:
+            credential = session.get(MonzoCredential, user_id)
+            if credential is not None and claims["ver"] != credential.session_version:
+                raise SessionAuthenticationError
+    except SQLAlchemyError as exc:
+        raise TokenStorageError("Token storage is unavailable") from None
     return user_id
 
 
@@ -57,11 +69,35 @@ async def resolve_monzo_access_token(user_id: str, session_factory, settings: Se
             credential = session.get(MonzoCredential, user_id)
             if credential is None:
                 raise MonzoConnectionError
-            access_token = credential.access_token
-            refresh_token = credential.refresh_token
+            access_token = decrypt_token(credential.access_token, settings)
+            refresh_token = decrypt_token(credential.refresh_token, settings)
             expires_at = credential.expires_at
     except SQLAlchemyError as exc:
-        raise TokenStorageError("Token storage is unavailable") from exc
+        raise TokenStorageError("Token storage is unavailable") from None
+
+    if _as_utc(expires_at) > datetime.now(timezone.utc):
+        return access_token
+
+    with _refresh_locks_guard:
+        lock = _refresh_locks.setdefault(user_id, Lock())
+    await asyncio.to_thread(lock.acquire)
+    try:
+        return await _refresh_access_token_locked(user_id, session_factory, settings)
+    finally:
+        lock.release()
+
+
+async def _refresh_access_token_locked(user_id: str, session_factory, settings: Settings) -> str:
+    try:
+        with session_factory() as session:
+            credential = session.get(MonzoCredential, user_id)
+            if credential is None:
+                raise MonzoConnectionError
+            access_token = decrypt_token(credential.access_token, settings)
+            refresh_token = decrypt_token(credential.refresh_token, settings)
+            expires_at = credential.expires_at
+    except SQLAlchemyError:
+        raise TokenStorageError("Token storage is unavailable") from None
 
     if _as_utc(expires_at) > datetime.now(timezone.utc):
         return access_token
@@ -80,7 +116,6 @@ async def resolve_monzo_access_token(user_id: str, session_factory, settings: Se
             exc.response.status_code,
             error_code,
             error_message,
-            exc_info=True,
         )
         if exc.response.status_code in {400, 401, 403}:
             raise MonzoConnectionError from exc
@@ -97,14 +132,16 @@ async def resolve_monzo_access_token(user_id: str, session_factory, settings: Se
             credential = session.get(MonzoCredential, user_id)
             if credential is None:
                 raise MonzoConnectionError
-            credential.access_token = refreshed.access_token
-            credential.refresh_token = refreshed.refresh_token or refresh_token
+            credential.access_token = encrypt_token(refreshed.access_token, settings)
+            credential.refresh_token = encrypt_token(
+                refreshed.refresh_token or refresh_token, settings
+            )
             credential.token_type = refreshed.token_type
             credential.expires_at = now + timedelta(seconds=refreshed.expires_in)
             credential.updated_at = now
             session.commit()
     except SQLAlchemyError as exc:
-        raise TokenStorageError("Token storage is unavailable") from exc
+        raise TokenStorageError("Token storage is unavailable") from None
 
     return refreshed.access_token
 

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs
@@ -8,12 +9,15 @@ import pytest
 import respx
 
 from app.db.models import MonzoCredential
+from app.services.token_store import encrypt_token, decrypt_token
+from app.schemas.monzo import MonzoTokenResponse
+from app.services.authorization import resolve_monzo_access_token
 
 
 def _session_token(settings, user_id="user_test123"):
     now = datetime.now(timezone.utc)
     return jwt.encode(
-        {"sub": user_id, "iat": now, "exp": now + timedelta(hours=1)},
+        {"sub": user_id, "ver": 0, "iat": now, "exp": now + timedelta(hours=1)},
         settings.jwt_secret_key,
         algorithm="HS256",
     )
@@ -25,8 +29,8 @@ def _save_credential(client, *, expired=False):
         session.add(
             MonzoCredential(
                 user_id="user_test123",
-                access_token="test-access-token",
-                refresh_token="test-refresh-token",
+                access_token=encrypt_token("test-access-token", client.app.state.settings),
+                refresh_token=encrypt_token("test-refresh-token", client.app.state.settings),
                 token_type="Bearer",
                 expires_at=now + timedelta(hours=-1 if expired else 1),
                 updated_at=now,
@@ -185,7 +189,7 @@ def test_accounts_endpoint_is_removed(client):
     assert response.status_code == 404
 
 
-def test_accounts_surfaces_monzo_error_in_response_and_logs(client, settings, caplog):
+def test_accounts_returns_sanitized_monzo_error_and_logs_code(client, settings, caplog):
     _save_credential(client)
     caplog.set_level(logging.WARNING)
     with respx.mock(assert_all_called=True) as monzo_mock:
@@ -201,16 +205,13 @@ def test_accounts_surfaces_monzo_error_in_response_and_logs(client, settings, ca
         )
 
     assert response.status_code == 403
-    assert response.json() == {
-        "code": "forbidden",
-        "message": "User approval required",
-    }
+    assert response.json() == {"detail": "Monzo request failed"}
     assert "monzo_request_failed operation=accounts upstream_status=403" in caplog.text
-    assert "monzo_code='forbidden'" in caplog.text
-    assert "monzo_message='User approval required'" in caplog.text
+    assert "monzo_code='upstream_error'" in caplog.text
+    assert "monzo_message='upstream_error'" in caplog.text
 
 
-def test_accounts_passes_through_unapproved_monzo_access(client, settings, caplog):
+def test_accounts_sanitizes_unapproved_monzo_error(client, settings, caplog):
     _save_credential(client)
     caplog.set_level(logging.WARNING)
     with respx.mock(assert_all_called=True) as monzo_mock:
@@ -229,12 +230,9 @@ def test_accounts_passes_through_unapproved_monzo_access(client, settings, caplo
         )
 
     assert response.status_code == 403
-    assert response.json() == {
-        "code": "forbidden",
-        "message": "Access forbidden due to insufficient permissions.",
-    }
-    assert "monzo_code='forbidden'" in caplog.text
-    assert "monzo_message='Access forbidden due to insufficient permissions.'" in caplog.text
+    assert response.json() == {"detail": "Monzo request failed"}
+    assert "monzo_code='upstream_error'" in caplog.text
+    assert "monzo_message='upstream_error'" in caplog.text
 
 
 def test_accounts_with_balances_only_returns_fields_in_service_schema(
@@ -405,8 +403,40 @@ def test_expired_access_token_is_refreshed_and_saved(client, settings):
     }
     with client.app.state.session_factory() as session:
         credential = session.get(MonzoCredential, "user_test123")
-        assert credential.access_token == "new-access-token"
-        assert credential.refresh_token == "new-refresh-token"
+        assert decrypt_token(credential.access_token, settings) == "new-access-token"
+        assert decrypt_token(credential.refresh_token, settings) == "new-refresh-token"
+
+
+def test_concurrent_expired_token_requests_refresh_once(client, settings, monkeypatch):
+    _save_credential(client, expired=True)
+    calls = 0
+
+    async def refresh(refresh_token, configured_settings):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.01)
+        return MonzoTokenResponse(
+            user_id="user_test123",
+            access_token="rotated-access-token",
+            refresh_token="rotated-refresh-token",
+            expires_in=3600,
+        )
+
+    monkeypatch.setattr("app.services.authorization.refresh_access_token", refresh)
+    async def resolve_twice():
+        return await asyncio.gather(
+            resolve_monzo_access_token(
+                "user_test123", client.app.state.session_factory, settings
+            ),
+            resolve_monzo_access_token(
+                "user_test123", client.app.state.session_factory, settings
+            ),
+        )
+
+    first, second = asyncio.run(resolve_twice())
+
+    assert first == second == "rotated-access-token"
+    assert calls == 1
 
 
 @pytest.mark.parametrize(
@@ -436,6 +466,18 @@ def test_accounts_with_balances_rejects_jwt_without_stored_credentials(
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Monzo connection is missing or expired"
+
+
+def test_logout_revokes_existing_application_token(client, settings):
+    _save_credential(client)
+    token = _session_token(settings)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    logout = client.post("/logout", headers=headers)
+    after_logout = client.get("/scheduled-transfers", headers=headers)
+
+    assert logout.status_code == 204
+    assert after_logout.status_code == 401
 
 
 def test_authentication_failure_is_traceable_without_logging_token(client, caplog):

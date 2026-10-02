@@ -41,7 +41,7 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def monzo_error_details(response: Any) -> tuple[str, str]:
-    """Extract bounded, non-credential fields from a Monzo error response."""
+    """Return a fixed diagnostic without trusting fields from upstream errors."""
     try:
         payload = response.json()
     except (ValueError, TypeError):
@@ -50,12 +50,4 @@ def monzo_error_details(response: Any) -> tuple[str, str]:
     if not isinstance(payload, dict):
         return "unknown", "unknown"
 
-    code = payload.get("code", payload.get("error", "unknown"))
-    message = payload.get("message", payload.get("error_description", "unknown"))
-    return _safe_log_value(code), _safe_log_value(message)
-
-
-def _safe_log_value(value: Any) -> str:
-    if not isinstance(value, (str, int, float, bool)):
-        return "unknown"
-    return str(value).replace("\r", "\\r").replace("\n", "\\n")[:300]
+    return "upstream_error", "upstream_error"

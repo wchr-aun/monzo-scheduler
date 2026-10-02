@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from typing import Literal, Never, TypeVar
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ValidationError
 
@@ -48,10 +49,10 @@ class MonzoSession:
     access_token: str
 
 
-async def monzo_session(
-    request: Request,
-    authorization: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> MonzoSession:
+async def authenticated_user_id(
+        request: Request,
+        authorization: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> str:
     if authorization is None:
         logger.warning(
             "authentication_failed path=%s reason=bearer_token_missing",
@@ -63,19 +64,34 @@ async def monzo_session(
         user_id = decode_user_id(
             authorization.credentials,
             request.app.state.settings,
-        )
-        access_token = await resolve_monzo_access_token(
-            user_id,
             request.app.state.session_factory,
-            request.app.state.settings,
         )
-        return MonzoSession(user_id=user_id, access_token=access_token)
+        return user_id
     except SessionAuthenticationError:
         logger.warning(
             "authentication_failed path=%s reason=invalid_or_expired_jwt",
             request.url.path,
         )
         _raise_unauthorized("Invalid or expired bearer token")
+    except TokenStorageError as exc:
+        logger.error(
+            "credential_resolution_failed path=%s reason=storage_or_configuration",
+            request.url.path,
+        )
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+async def monzo_session(
+        request: Request,
+        user_id: str = Depends(authenticated_user_id),
+) -> MonzoSession:
+    try:
+        access_token = await resolve_monzo_access_token(
+            user_id,
+            request.app.state.session_factory,
+            request.app.state.settings,
+        )
+        return MonzoSession(user_id=user_id, access_token=access_token)
     except MonzoConnectionError:
         logger.warning(
             "authentication_failed path=%s reason=monzo_connection_unavailable",
@@ -101,7 +117,6 @@ async def monzo_session(
         logger.error(
             "credential_refresh_failed path=%s reason=monzo_unreachable",
             request.url.path,
-            exc_info=True,
         )
         raise HTTPException(status_code=503, detail="Monzo API is unreachable") from exc
     except httpx.HTTPStatusError as exc:
@@ -109,7 +124,7 @@ async def monzo_session(
 
 
 async def monzo_access_token(
-    authentication: MonzoSession = Depends(monzo_session),
+        authentication: MonzoSession = Depends(monzo_session),
 ) -> str:
     return authentication.access_token
 
@@ -119,8 +134,8 @@ async def monzo_access_token(
     response_model=AccountsWithBalancesResponse,
 )
 async def accounts_with_balances(
-    account_type: str | None = None,
-    access_token: str = Depends(monzo_access_token),
+        account_type: str | None = None,
+        access_token: str = Depends(monzo_access_token),
 ) -> AccountsWithBalancesResponse | Response:
     accounts_response = await _validate_response(
         get_accounts(access_token, account_type),
@@ -136,7 +151,7 @@ async def accounts_with_balances(
     )
     accounts_with_balances: list[AccountWithBalance] = []
     for account, balance_response in zip(
-        accounts_response.accounts, balance_responses, strict=True
+            accounts_response.accounts, balance_responses, strict=True
     ):
         balance = _optional_balance(balance_response)
         accounts_with_balances.append(
@@ -153,7 +168,6 @@ def _optional_balance(response: BalanceResult) -> BalanceResponse | None:
     if isinstance(response, httpx.RequestError):
         logger.error(
             "monzo_request_failed operation=balance reason=monzo_unreachable",
-            exc_info=(type(response), response, response.__traceback__),
         )
         return None
 
@@ -171,8 +185,8 @@ def _optional_balance(response: BalanceResult) -> BalanceResponse | None:
 
 @router.get("/balance", response_model=BalanceResponse)
 async def balance(
-    account_id: str,
-    access_token: str = Depends(monzo_access_token),
+        account_id: str = Query(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9_-]+$"),
+        access_token: str = Depends(monzo_access_token),
 ) -> BalanceResponse | Response:
     return await _validate_response(
         get_balance(access_token, account_id),
@@ -183,8 +197,10 @@ async def balance(
 
 @router.get("/pots", response_model=PotsResponse)
 async def pots(
-    current_account_id: str,
-    access_token: str = Depends(monzo_access_token),
+        current_account_id: str = Query(
+            min_length=1, max_length=255, pattern=r"^[A-Za-z0-9_-]+$"
+        ),
+        access_token: str = Depends(monzo_access_token),
 ) -> PotsResponse | Response:
     return await _validate_response(
         get_pots(access_token, current_account_id),
@@ -194,19 +210,19 @@ async def pots(
 
 
 async def _validate_response(
-    response_awaitable: Awaitable[httpx.Response],
-    schema: type[SchemaT],
-    *,
-    operation: MonzoOperation,
+        response_awaitable: Awaitable[httpx.Response],
+        schema: type[SchemaT],
+        *,
+        operation: MonzoOperation,
 ) -> SchemaT | Response:
     response = await _await_monzo_response(response_awaitable, operation=operation)
     return _validate_completed_response(response, schema, operation=operation)
 
 
 async def _await_monzo_response(
-    response_awaitable: Awaitable[ResponseValueT],
-    *,
-    operation: MonzoOperation,
+        response_awaitable: Awaitable[ResponseValueT],
+        *,
+        operation: MonzoOperation,
 ) -> ResponseValueT:
     try:
         return await response_awaitable
@@ -214,16 +230,15 @@ async def _await_monzo_response(
         logger.error(
             "monzo_request_failed operation=%s reason=monzo_unreachable",
             operation,
-            exc_info=True,
         )
         raise HTTPException(status_code=503, detail="Monzo API is unreachable") from exc
 
 
 def _validate_completed_response(
-    response: httpx.Response,
-    schema: type[SchemaT],
-    *,
-    operation: MonzoOperation,
+        response: httpx.Response,
+        schema: type[SchemaT],
+        *,
+        operation: MonzoOperation,
 ) -> SchemaT | Response:
     if response.is_error:
         error_code, error_message = monzo_error_details(response)
@@ -235,10 +250,19 @@ def _validate_completed_response(
             error_code,
             error_message,
         )
-        return Response(
-            content=response.content,
+        if _requires_monzo_approval(response):
+            return JSONResponse(
+                content={
+                    "detail": {
+                        "code": "monzo_approval_required",
+                        "message": "You have not yet allowed access to your data. Please allow access to your data in the Monzo app.",
+                    }
+                },
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+        return JSONResponse(
+            content={"detail": "Monzo request failed"},
             status_code=response.status_code,
-            media_type=response.headers.get("content-type"),
         )
 
     try:
@@ -269,6 +293,20 @@ def _validate_completed_response(
             status_code=502,
             detail="Monzo returned an invalid response",
         ) from exc
+
+
+def _requires_monzo_approval(response: httpx.Response) -> bool:
+    """Recognize the one Monzo error that has a specific user action."""
+    if response.status_code != status.HTTP_403_FORBIDDEN:
+        return False
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        return False
+    return (
+            isinstance(payload, dict)
+            and payload.get("code") == "forbidden.insufficient_permissions"
+    )
 
 
 def _raise_unauthorized(detail: str) -> Never:

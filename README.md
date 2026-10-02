@@ -13,6 +13,8 @@ After completing the Monzo OAuth flow, send the returned application token as
 - `GET /scheduled-transfers`
 - `POST /schedule-transfer`
 - `DELETE /schedule-transfer/<setup_id>`
+- `POST /logout` to revoke application sessions
+- `POST /emergency-stop` to revoke sessions, deactivate schedules, and cancel pending transfers
 
 Schedule requests use a timezone-aware UK local datetime, a positive amount in
 minor currency units, and one of the `daily`, `weekly`, or `monthly` intervals:
@@ -34,9 +36,35 @@ then return to the requested day when it exists again.
 Each schedule is stored as an active or deactivated setup. Individual transfer
 occurrences are stored separately as pending, completed, failed, or cancelled.
 Cancelling a setup cancels its pending occurrence and removes its scheduler job.
+An occurrence is marked running while Monzo processes it.
 
 The service resolves the Monzo credentials associated with the token's `sub`
 claim and refreshes an expired Monzo access token when possible.
+
+## Security configuration
+
+Set `JWT_SECRET_KEY` to a random value of at least 32 bytes and keep
+`JWT_EXPIRATION_SECONDS` between 1 and 3600; the default is 900 seconds. Generate
+`TOKEN_ENCRYPTION_KEY` with:
+
+```sh
+uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+```
+
+The same encryption key must be available to the application and Alembic before
+running `uv run alembic upgrade head`. Migration `0005` encrypts existing Monzo
+tokens. Losing the key makes stored tokens unreadable; keep protected backups of
+the key and restrict access to the database and its backups. Replace the key only
+after re-encrypting stored credentials. Older backups made before migration may
+still contain plaintext tokens and should be retired securely; rotate Monzo
+credentials if those copies cannot be accounted for.
+
+OAuth state expires after ten minutes. The service limits requests to 120 per
+client address per minute and active schedules to 50 per user. These limits and
+the scheduler are process-local, so run one worker and configure the ASGI server
+to supply the real client address when the service is behind a trusted proxy.
+Emergency stop waits for any in-flight transfer, then cancels pending work and
+revokes the user's application sessions.
 
 ## Logging
 

@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import asyncio
 from urllib.parse import parse_qs
 from uuid import UUID
 
@@ -14,12 +15,14 @@ from app.db.models import (
 )
 from app.schemas.tasks import UK_TIMEZONE
 from app.services.scheduler import execute_scheduled_transfer
+from app.services.token_store import encrypt_token
+from app.services.monzo import deposit_into_pot
 
 
 def _session_token(settings, user_id="user_test123"):
     now = datetime.now(timezone.utc)
     return jwt.encode(
-        {"sub": user_id, "iat": now, "exp": now + timedelta(hours=1)},
+        {"sub": user_id, "ver": 0, "iat": now, "exp": now + timedelta(hours=1)},
         settings.jwt_secret_key,
         algorithm="HS256",
     )
@@ -31,8 +34,8 @@ def _save_credential(client):
         session.add(
             MonzoCredential(
                 user_id="user_test123",
-                access_token="test-access-token",
-                refresh_token="test-refresh-token",
+                access_token=encrypt_token("test-access-token", client.app.state.settings),
+                refresh_token=encrypt_token("test-refresh-token", client.app.state.settings),
                 token_type="Bearer",
                 expires_at=now + timedelta(hours=1),
                 updated_at=now,
@@ -95,6 +98,115 @@ def test_schedule_transfer_endpoint_persists_authenticated_users_task(
         assert transfer.executed_at is None
 
 
+def test_emergency_stop_cancels_pending_transfers_and_revokes_sessions(client, settings):
+    _save_credential(client)
+    token = _session_token(settings)
+    headers = {"Authorization": f"Bearer {token}"}
+    scheduled_at = (datetime.now(UK_TIMEZONE) + timedelta(days=2)).replace(
+        second=0, microsecond=0
+    )
+    created = client.post(
+        "/schedule-transfer",
+        headers=headers,
+        json={
+            "datetime": scheduled_at.isoformat(),
+            "interval": "weekly",
+            "type": "deposit",
+            "amount": 1250,
+            "pot_id": "pot_123",
+            "account_id": "acc_123",
+        },
+    ).json()
+
+    stopped = client.post("/emergency-stop", headers=headers)
+    old_session = client.get("/scheduled-transfers", headers=headers)
+
+    assert stopped.status_code == 204
+    assert old_session.status_code == 401
+    assert client.app.state.scheduler.get_job(created["transfer_id"]) is None
+    with client.app.state.session_factory() as session:
+        setup = session.get(ScheduledTransferSetup, created["setup_id"])
+        transfer = session.get(ScheduledTransfer, created["transfer_id"])
+        assert setup.status == "deactivated"
+        assert transfer.status == "cancelled"
+
+
+def test_schedule_endpoint_enforces_active_schedule_quota(client, settings):
+    _save_credential(client)
+    now = datetime.now(timezone.utc)
+    with client.app.state.session_factory() as session:
+        session.add_all(
+            [
+                ScheduledTransferSetup(
+                    setup_id=f"quota-setup-{index}",
+                    user_id="user_test123",
+                    scheduled_date=(now + timedelta(days=2)).date(),
+                    hour=9,
+                    minute=index % 60,
+                    interval="daily",
+                    transfer_type="deposit",
+                    amount=100,
+                    pot_id="pot_123",
+                    account_id="acc_123",
+                    status="active",
+                )
+                for index in range(50)
+            ]
+        )
+        session.commit()
+    scheduled_at = (datetime.now(UK_TIMEZONE) + timedelta(days=2)).replace(
+        second=0, microsecond=0
+    )
+
+    response = client.post(
+        "/schedule-transfer",
+        headers={"Authorization": f"Bearer {_session_token(settings)}"},
+        json={
+            "datetime": scheduled_at.isoformat(),
+            "interval": "weekly",
+            "type": "deposit",
+            "amount": 100,
+            "pot_id": "pot_123",
+            "account_id": "acc_123",
+        },
+    )
+
+    assert response.status_code == 429
+
+
+@pytest.mark.parametrize("pot_id", ["../accounts", "pot/a", "pot?x=1"])
+def test_schedule_endpoint_rejects_pot_ids_that_can_change_api_path(
+    client, settings, pot_id
+):
+    _save_credential(client)
+    scheduled_at = (datetime.now(UK_TIMEZONE) + timedelta(days=2)).replace(
+        second=0, microsecond=0
+    )
+    response = client.post(
+        "/schedule-transfer",
+        headers={"Authorization": f"Bearer {_session_token(settings)}"},
+        json={
+            "datetime": scheduled_at.isoformat(),
+            "interval": "weekly",
+            "type": "deposit",
+            "amount": 100,
+            "pot_id": pot_id,
+            "account_id": "acc_123",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_monzo_deposit_rejects_legacy_traversal_ids_before_request():
+    with pytest.raises(ValueError, match="Invalid Monzo resource identifier"):
+        asyncio.run(
+            deposit_into_pot(
+                "unused-access-token", "../accounts", "acc_123", 100, "dedupe"
+            )
+        )
+
+
 def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
     client, settings
 ):
@@ -104,7 +216,7 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
         session.add(
             MonzoCredential(
                 user_id="another-user",
-                access_token="another-access-token",
+                access_token=encrypt_token("another-access-token", client.app.state.settings),
                 refresh_token=None,
                 token_type="Bearer",
                 expires_at=now + timedelta(hours=1),

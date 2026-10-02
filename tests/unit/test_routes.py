@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
+from time import monotonic
 
 import httpx
 import pytest
@@ -18,6 +19,11 @@ from app.services.scheduler import ScheduledTransfersPage
 
 @contextmanager
 def _client_for_settings(settings):
+    if not settings.token_encryption_key:
+        settings = replace(
+            settings,
+            token_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+        )
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -34,6 +40,18 @@ def test_health_route(client):
 
     assert response.status_code == 200
     assert response.json() == {"message": "ok"}
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "no-referrer"
+
+
+def test_health_route_adds_hsts_over_https(client):
+    response = client.get("https://testserver/health")
+
+    assert response.status_code == 200
+    assert response.headers["strict-transport-security"] == (
+        "max-age=31536000; includeSubDomains"
+    )
 
 
 def test_schedule_transfer_calls_scheduler_service(monkeypatch, client):
@@ -197,6 +215,7 @@ def test_get_scheduled_transfers_calls_scheduler_service(monkeypatch, client):
     assert called["pot_id"] == "pot-123"
     assert [status.value for status in called["statuses"]] == [
         "pending",
+        "running",
         "completed",
         "failed",
     ]
@@ -254,9 +273,7 @@ def test_create_task_endpoint_is_removed(client):
 
 
 def test_monzo_redirect_requires_client_id(settings):
-    settings = settings.__class__(
-        "", settings.monzo_client_secret, settings.monzo_redirect_uri
-    )
+    settings = replace(settings, monzo_client_id="")
 
     with _client_for_settings(settings) as client:
         response = client.get("/monzo-redirect")
@@ -272,12 +289,21 @@ def test_monzo_callback_rejects_unknown_state(client):
     assert response.json()["detail"] == "Invalid or expired OAuth state"
 
 
-def test_monzo_callback_requires_both_credentials(settings):
-    settings = settings.__class__(
-        settings.monzo_client_id, "", settings.monzo_redirect_uri
+def test_monzo_callback_rejects_expired_state(client):
+    client.app.state.oauth_states["expired"] = monotonic() - 601
+    client.cookies.set("monzo_oauth_state", "expired", path="/monzo-callback")
+    response = client.get(
+        "/monzo-callback", params={"code": "code", "state": "expired"}
     )
+
+    assert response.status_code == 400
+
+
+def test_monzo_callback_requires_both_credentials(settings):
+    settings = replace(settings, monzo_client_secret="")
     with _client_for_settings(settings) as client:
-        client.app.state.oauth_states.add("valid")
+        client.app.state.oauth_states["valid"] = monotonic()
+        client.cookies.set("monzo_oauth_state", "valid", path="/monzo-callback")
         response = client.get(
             "/monzo-callback", params={"code": "code", "state": "valid"}
         )
@@ -288,14 +314,9 @@ def test_monzo_callback_requires_both_credentials(settings):
 
 def test_monzo_callback_requires_jwt_configuration(settings):
     incomplete_settings = replace(settings, jwt_secret_key="")
-    with _client_for_settings(incomplete_settings) as client:
-        client.app.state.oauth_states.add("valid")
-        response = client.get(
-            "/monzo-callback", params={"code": "code", "state": "valid"}
-        )
-
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Session signing is not configured"
+    with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
+        with _client_for_settings(incomplete_settings):
+            pass
 
 
 @pytest.mark.parametrize("token_response", [{}, {"user_id": "user-1"}])
@@ -306,7 +327,8 @@ def test_monzo_callback_rejects_incomplete_token_payload(
         return token_response
 
     monkeypatch.setattr(monzo, "exchange_authorization_code", fake_exchange)
-    client.app.state.oauth_states.add("valid")
+    client.app.state.oauth_states["valid"] = monotonic()
+    client.cookies.set("monzo_oauth_state", "valid", path="/monzo-callback")
     response = client.get(
         "/monzo-callback", params={"code": "code", "state": "valid"}
     )
@@ -341,7 +363,8 @@ def test_monzo_callback_maps_upstream_errors(
         raise failure
 
     monkeypatch.setattr(monzo, "exchange_authorization_code", fail_exchange)
-    client.app.state.oauth_states.add("valid")
+    client.app.state.oauth_states["valid"] = monotonic()
+    client.cookies.set("monzo_oauth_state", "valid", path="/monzo-callback")
 
     response = client.get("/monzo-callback", params={"code": "code", "state": "valid"})
 
