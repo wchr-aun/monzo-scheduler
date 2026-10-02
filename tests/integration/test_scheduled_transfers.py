@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import asyncio
 from urllib.parse import parse_qs
 from uuid import UUID
 
@@ -15,6 +16,7 @@ from app.db.models import (
 from app.schemas.tasks import UK_TIMEZONE
 from app.services.scheduler import execute_scheduled_transfer
 from app.services.token_store import encrypt_token
+from app.services.monzo import deposit_into_pot
 
 
 def _session_token(settings, user_id="user_test123"):
@@ -194,6 +196,15 @@ def test_schedule_endpoint_rejects_pot_ids_that_can_change_api_path(
     )
 
     assert response.status_code == 422
+
+
+def test_monzo_deposit_rejects_legacy_traversal_ids_before_request():
+    with pytest.raises(ValueError, match="Invalid Monzo resource identifier"):
+        asyncio.run(
+            deposit_into_pot(
+                "unused-access-token", "../accounts", "acc_123", 100, "dedupe"
+            )
+        )
 
 
 def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
