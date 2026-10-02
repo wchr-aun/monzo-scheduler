@@ -165,7 +165,7 @@ def list_scheduled_transfers(
         )
 
 
-def schedule_transfer(
+def _schedule_transfer_unlocked(
         scheduler: BackgroundScheduler,
         session_factory: sessionmaker[Session],
         settings: Settings,
@@ -228,6 +228,25 @@ def schedule_transfer(
         raise
 
     return setup, transfer, job
+
+
+def schedule_transfer(
+    scheduler: BackgroundScheduler,
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    user_id: str,
+    request: ScheduleTransferRequest,
+    *,
+    now: datetime | None = None,
+) -> tuple[ScheduledTransferSetup, ScheduledTransfer, Job]:
+    lock = _user_execution_lock(user_id)
+    lock.acquire()
+    try:
+        return _schedule_transfer_unlocked(
+            scheduler, session_factory, settings, user_id, request, now=now
+        )
+    finally:
+        lock.release()
 
 
 def cancel_scheduled_transfer(
