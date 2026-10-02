@@ -127,20 +127,22 @@ async def create_feed_item(
     title: str,
     image_url: str,
     body: str,
-    url: str,
+    url: str | None = None,
 ) -> httpx.Response:
     """Create a basic item in the account's Monzo feed."""
+    data = {
+        "account_id": account_id,
+        "type": "basic",
+        "params[title]": title,
+        "params[image_url]": image_url,
+        "params[body]": body,
+    }
+    if url is not None:
+        data["url"] = url
     return await _post(
         "/feed",
         access_token,
-        data={
-            "account_id": account_id,
-            "type": "basic",
-            "url": url,
-            "params[title]": title,
-            "params[image_url]": image_url,
-            "params[body]": body,
-        },
+        data=data,
     )
 
 

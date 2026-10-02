@@ -331,7 +331,6 @@ def test_get_scheduled_transfers_requires_authentication(client):
         "path",
         "account_field",
         "past_tense_action",
-        "preposition",
     ),
     [
         (
@@ -339,14 +338,12 @@ def test_get_scheduled_transfers_requires_authentication(client):
             "/pots/pot_123/deposit",
             "source_account_id",
             "deposited",
-            "to",
         ),
         (
             "withdraw",
             "/pots/pot_123/withdraw",
             "destination_account_id",
             "withdrawn",
-            "from",
         ),
     ],
 )
@@ -357,7 +354,6 @@ def test_scheduled_transfer_uses_monzo_pot_api_form_fields(
     path,
     account_field,
     past_tense_action,
-    preposition,
 ):
     _save_credential(client)
     setup_id = f"setup-{transfer_type}"
@@ -416,17 +412,16 @@ def test_scheduled_transfer_uses_monzo_pot_api_form_fields(
     assert feed_form == {
         "account_id": ["acc_123"],
         "type": ["basic"],
-        "url": [
-            "https://monzo-scheduler-ui.vercel.app/account/acc_123/pot/pot_123"
-        ],
-        "params[title]": [
-            f"🎉 £12.50 was {past_tense_action} {preposition} Rainy Day!"
-        ],
+        "params[title]": [f"🎉 £12.50 {past_tense_action}"],
         "params[image_url]": [
             "https://raw.githubusercontent.com/wchr-aun/monzo-scheduler-ui/"
             "refs/heads/main/public/logo.png"
         ],
-        "params[body]": ["Scheduled by Schedzo."],
+        "params[body]": [
+            "Balance → Rainy Day"
+            if transfer_type == "deposit"
+            else "Rainy Day → Balance"
+        ],
     }
 
     with client.app.state.session_factory() as session:
@@ -528,8 +523,11 @@ def test_failed_occurrence_is_recorded_and_next_occurrence_is_pending(
             )
 
     feed_form = parse_qs(feed.calls.last.request.content.decode())
-    assert feed_form["params[title]"] == ["❌ £12.50 deposit failed!"]
-    assert feed_form["params[body]"] == ["Scheduled by Schedzo."]
+    assert feed_form["params[title]"] == ["❌ £12.50 deposit failed"]
+    assert feed_form["params[body]"] == ["Balance → Pot"]
+    assert feed_form["url"] == [
+        "https://monzo-scheduler-ui.vercel.app/account/acc_123/pot/pot_123"
+    ]
 
     with client.app.state.session_factory() as session:
         transfers = session.query(ScheduledTransfer).filter_by(setup_id=setup_id).all()

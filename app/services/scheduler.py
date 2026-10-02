@@ -387,13 +387,12 @@ async def _notify_transfer_result(
     action = "deposit" if is_deposit else "withdrawal"
     past_tense_action = "deposited" if is_deposit else "withdrawn"
     amount = _format_gbp(values.amount)
+    pot_name = pot_name or "Pot"
     if succeeded:
-        preposition = "to" if is_deposit else "from"
-        destination = f" {preposition} {pot_name}" if pot_name else ""
-        title = f"🎉 {amount} was {past_tense_action}{destination}!"
+        title = f"🎉 {amount} {past_tense_action}"
     else:
-        title = f"❌ {amount} {action} failed!"
-    body = "Scheduled by Schedzo"
+        title = f"❌ {amount} {action} failed"
+    body = f"Balance → {pot_name}" if is_deposit else f"{pot_name} → Balance"
 
     account_id = quote(values.account_id, safe="")
     pot_id = quote(values.pot_id, safe="")
@@ -404,7 +403,11 @@ async def _notify_transfer_result(
             title=title,
             image_url=FEED_IMAGE_URL,
             body=body,
-            url=f"{SCHEDULER_UI_URL}/account/{account_id}/pot/{pot_id}",
+            url=(
+                None
+                if succeeded
+                else f"{SCHEDULER_UI_URL}/account/{account_id}/pot/{pot_id}"
+            ),
         )
         if response.is_error:
             error_code, error_message = monzo_error_details(response)
