@@ -29,6 +29,10 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
             Fernet(settings.token_encryption_key.encode())
         except (TypeError, ValueError) as exc:
             raise RuntimeError("TOKEN_ENCRYPTION_KEY must be a valid Fernet key") from exc
+        if len(settings.jwt_secret_key.encode()) < 32:
+            raise RuntimeError("JWT_SECRET_KEY must contain at least 32 bytes")
+        if not 1 <= settings.jwt_expiration_seconds <= 3600:
+            raise RuntimeError("JWT_EXPIRATION_SECONDS must be between 1 and 3600")
         database_engine = engine or create_database_engine(settings.database_url)
         session_factory = create_session_factory(database_engine)
         scheduler = BackgroundScheduler(timezone="UTC")
