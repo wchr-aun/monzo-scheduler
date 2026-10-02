@@ -1,6 +1,8 @@
 """Application JWT validation and Monzo access-token resolution."""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
+from threading import Lock
 
 import httpx
 import jwt
@@ -14,6 +16,8 @@ from app.services.monzo import refresh_access_token
 from app.services.token_store import decrypt_token, encrypt_token
 
 logger = get_logger(__name__)
+_refresh_locks: dict[str, Lock] = {}
+_refresh_locks_guard = Lock()
 
 
 class SessionAuthenticationError(Exception):
@@ -69,6 +73,30 @@ async def resolve_monzo_access_token(user_id: str, session_factory, settings: Se
             refresh_token = decrypt_token(credential.refresh_token, settings)
             expires_at = credential.expires_at
     except SQLAlchemyError as exc:
+        raise TokenStorageError("Token storage is unavailable") from None
+
+    if _as_utc(expires_at) > datetime.now(timezone.utc):
+        return access_token
+
+    with _refresh_locks_guard:
+        lock = _refresh_locks.setdefault(user_id, Lock())
+    await asyncio.to_thread(lock.acquire)
+    try:
+        return await _refresh_access_token_locked(user_id, session_factory, settings)
+    finally:
+        lock.release()
+
+
+async def _refresh_access_token_locked(user_id: str, session_factory, settings: Settings) -> str:
+    try:
+        with session_factory() as session:
+            credential = session.get(MonzoCredential, user_id)
+            if credential is None:
+                raise MonzoConnectionError
+            access_token = decrypt_token(credential.access_token, settings)
+            refresh_token = decrypt_token(credential.refresh_token, settings)
+            expires_at = credential.expires_at
+    except SQLAlchemyError:
         raise TokenStorageError("Token storage is unavailable") from None
 
     if _as_utc(expires_at) > datetime.now(timezone.utc):

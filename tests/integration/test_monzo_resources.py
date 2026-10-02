@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs
@@ -9,6 +10,8 @@ import respx
 
 from app.db.models import MonzoCredential
 from app.services.token_store import encrypt_token, decrypt_token
+from app.schemas.monzo import MonzoTokenResponse
+from app.services.authorization import resolve_monzo_access_token
 
 
 def _session_token(settings, user_id="user_test123"):
@@ -408,6 +411,38 @@ def test_expired_access_token_is_refreshed_and_saved(client, settings):
         credential = session.get(MonzoCredential, "user_test123")
         assert decrypt_token(credential.access_token, settings) == "new-access-token"
         assert decrypt_token(credential.refresh_token, settings) == "new-refresh-token"
+
+
+def test_concurrent_expired_token_requests_refresh_once(client, settings, monkeypatch):
+    _save_credential(client, expired=True)
+    calls = 0
+
+    async def refresh(refresh_token, configured_settings):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.01)
+        return MonzoTokenResponse(
+            user_id="user_test123",
+            access_token="rotated-access-token",
+            refresh_token="rotated-refresh-token",
+            expires_in=3600,
+        )
+
+    monkeypatch.setattr("app.services.authorization.refresh_access_token", refresh)
+    async def resolve_twice():
+        return await asyncio.gather(
+            resolve_monzo_access_token(
+                "user_test123", client.app.state.session_factory, settings
+            ),
+            resolve_monzo_access_token(
+                "user_test123", client.app.state.session_factory, settings
+            ),
+        )
+
+    first, second = asyncio.run(resolve_twice())
+
+    assert first == second == "rotated-access-token"
+    assert calls == 1
 
 
 @pytest.mark.parametrize(
