@@ -14,6 +14,7 @@ from app.db.models import (
 )
 from app.schemas.tasks import UK_TIMEZONE
 from app.services.scheduler import execute_scheduled_transfer
+from app.services.token_store import encrypt_token
 
 
 def _session_token(settings, user_id="user_test123"):
@@ -31,8 +32,8 @@ def _save_credential(client):
         session.add(
             MonzoCredential(
                 user_id="user_test123",
-                access_token="test-access-token",
-                refresh_token="test-refresh-token",
+                access_token=encrypt_token("test-access-token", client.app.state.settings),
+                refresh_token=encrypt_token("test-refresh-token", client.app.state.settings),
                 token_type="Bearer",
                 expires_at=now + timedelta(hours=1),
                 updated_at=now,
@@ -137,7 +138,7 @@ def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
         session.add(
             MonzoCredential(
                 user_id="another-user",
-                access_token="another-access-token",
+                access_token=encrypt_token("another-access-token", client.app.state.settings),
                 refresh_token=None,
                 token_type="Bearer",
                 expires_at=now + timedelta(hours=1),

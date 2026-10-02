@@ -16,6 +16,7 @@ class Settings:
     monzo_redirect_uri: str
     database_url: str = "sqlite:///./monzo_scheduler.db"
     jwt_secret_key: str = field(default="", repr=False)
+    token_encryption_key: str = field(default="", repr=False)
     jwt_expiration_seconds: int = 86400
 
     @classmethod
@@ -29,5 +30,6 @@ class Settings:
             ),
             database_url=os.getenv("DATABASE_URL", "sqlite:///./monzo_scheduler.db"),
             jwt_secret_key=os.getenv("JWT_SECRET_KEY", ""),
+            token_encryption_key=os.getenv("TOKEN_ENCRYPTION_KEY", ""),
             jwt_expiration_seconds=int(os.getenv("JWT_EXPIRATION_SECONDS", "86400")),
         )

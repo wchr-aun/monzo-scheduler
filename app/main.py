@@ -4,6 +4,7 @@ from uuid import uuid6
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request
+from cryptography.fernet import Fernet
 
 from app.config import Settings
 from app.db.session import create_database_engine, create_session_factory
@@ -20,6 +21,12 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
+        if not settings.token_encryption_key:
+            raise RuntimeError("TOKEN_ENCRYPTION_KEY is not configured")
+        try:
+            Fernet(settings.token_encryption_key.encode())
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("TOKEN_ENCRYPTION_KEY must be a valid Fernet key") from exc
         database_engine = engine or create_database_engine(settings.database_url)
         session_factory = create_session_factory(database_engine)
         scheduler = BackgroundScheduler(timezone="UTC")

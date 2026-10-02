@@ -21,8 +21,8 @@ class MonzoCredential(Base):
     __tablename__ = "monzo_credentials"
 
     user_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    access_token: Mapped[str] = mapped_column(String, nullable=False)
-    refresh_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    access_token: Mapped[str] = mapped_column("access_token_ciphertext", String, nullable=False)
+    refresh_token: Mapped[str | None] = mapped_column("refresh_token_ciphertext", String, nullable=True)
     token_type: Mapped[str] = mapped_column(String(32), nullable=False)
     session_version: Mapped[int] = mapped_column(default=0, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(

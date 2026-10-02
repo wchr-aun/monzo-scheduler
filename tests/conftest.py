@@ -15,6 +15,7 @@ def settings():
         monzo_client_secret="test-client-secret",
         monzo_redirect_uri="http://testserver/monzo-callback",
         jwt_secret_key="test-jwt-signing-secret-for-tests-only",
+        token_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
     )
 
 

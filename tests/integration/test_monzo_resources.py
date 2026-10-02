@@ -8,6 +8,7 @@ import pytest
 import respx
 
 from app.db.models import MonzoCredential
+from app.services.token_store import encrypt_token, decrypt_token
 
 
 def _session_token(settings, user_id="user_test123"):
@@ -25,8 +26,8 @@ def _save_credential(client, *, expired=False):
         session.add(
             MonzoCredential(
                 user_id="user_test123",
-                access_token="test-access-token",
-                refresh_token="test-refresh-token",
+                access_token=encrypt_token("test-access-token", client.app.state.settings),
+                refresh_token=encrypt_token("test-refresh-token", client.app.state.settings),
                 token_type="Bearer",
                 expires_at=now + timedelta(hours=-1 if expired else 1),
                 updated_at=now,
@@ -405,8 +406,8 @@ def test_expired_access_token_is_refreshed_and_saved(client, settings):
     }
     with client.app.state.session_factory() as session:
         credential = session.get(MonzoCredential, "user_test123")
-        assert credential.access_token == "new-access-token"
-        assert credential.refresh_token == "new-refresh-token"
+        assert decrypt_token(credential.access_token, settings) == "new-access-token"
+        assert decrypt_token(credential.refresh_token, settings) == "new-refresh-token"
 
 
 @pytest.mark.parametrize(

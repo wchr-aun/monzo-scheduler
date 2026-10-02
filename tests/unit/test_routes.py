@@ -18,6 +18,11 @@ from app.services.scheduler import ScheduledTransfersPage
 
 @contextmanager
 def _client_for_settings(settings):
+    if not settings.token_encryption_key:
+        settings = replace(
+            settings,
+            token_encryption_key="MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+        )
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -278,6 +283,7 @@ def test_monzo_callback_requires_both_credentials(settings):
     )
     with _client_for_settings(settings) as client:
         client.app.state.oauth_states.add("valid")
+        client.cookies.set("monzo_oauth_state", "valid", path="/monzo-callback")
         response = client.get(
             "/monzo-callback", params={"code": "code", "state": "valid"}
         )
@@ -290,6 +296,7 @@ def test_monzo_callback_requires_jwt_configuration(settings):
     incomplete_settings = replace(settings, jwt_secret_key="")
     with _client_for_settings(incomplete_settings) as client:
         client.app.state.oauth_states.add("valid")
+        client.cookies.set("monzo_oauth_state", "valid", path="/monzo-callback")
         response = client.get(
             "/monzo-callback", params={"code": "code", "state": "valid"}
         )
@@ -307,6 +314,7 @@ def test_monzo_callback_rejects_incomplete_token_payload(
 
     monkeypatch.setattr(monzo, "exchange_authorization_code", fake_exchange)
     client.app.state.oauth_states.add("valid")
+    client.cookies.set("monzo_oauth_state", "valid", path="/monzo-callback")
     response = client.get(
         "/monzo-callback", params={"code": "code", "state": "valid"}
     )
@@ -342,6 +350,7 @@ def test_monzo_callback_maps_upstream_errors(
 
     monkeypatch.setattr(monzo, "exchange_authorization_code", fail_exchange)
     client.app.state.oauth_states.add("valid")
+    client.cookies.set("monzo_oauth_state", "valid", path="/monzo-callback")
 
     response = client.get("/monzo-callback", params={"code": "code", "state": "valid"})
 

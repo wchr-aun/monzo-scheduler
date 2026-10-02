@@ -11,6 +11,7 @@ from app.config import Settings
 from app.db.models import MonzoCredential
 from app.observability import get_logger, monzo_error_details
 from app.services.monzo import refresh_access_token
+from app.services.token_store import decrypt_token, encrypt_token
 
 logger = get_logger(__name__)
 
@@ -64,8 +65,8 @@ async def resolve_monzo_access_token(user_id: str, session_factory, settings: Se
             credential = session.get(MonzoCredential, user_id)
             if credential is None:
                 raise MonzoConnectionError
-            access_token = credential.access_token
-            refresh_token = credential.refresh_token
+            access_token = decrypt_token(credential.access_token, settings)
+            refresh_token = decrypt_token(credential.refresh_token, settings)
             expires_at = credential.expires_at
     except SQLAlchemyError as exc:
         raise TokenStorageError("Token storage is unavailable") from None
@@ -103,8 +104,10 @@ async def resolve_monzo_access_token(user_id: str, session_factory, settings: Se
             credential = session.get(MonzoCredential, user_id)
             if credential is None:
                 raise MonzoConnectionError
-            credential.access_token = refreshed.access_token
-            credential.refresh_token = refreshed.refresh_token or refresh_token
+            credential.access_token = encrypt_token(refreshed.access_token, settings)
+            credential.refresh_token = encrypt_token(
+                refreshed.refresh_token or refresh_token, settings
+            )
             credential.token_type = refreshed.token_type
             credential.expires_at = now + timedelta(seconds=refreshed.expires_in)
             credential.updated_at = now
