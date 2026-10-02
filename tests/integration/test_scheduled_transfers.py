@@ -19,7 +19,7 @@ from app.services.scheduler import execute_scheduled_transfer
 def _session_token(settings, user_id="user_test123"):
     now = datetime.now(timezone.utc)
     return jwt.encode(
-        {"sub": user_id, "iat": now, "exp": now + timedelta(hours=1)},
+        {"sub": user_id, "ver": 0, "iat": now, "exp": now + timedelta(hours=1)},
         settings.jwt_secret_key,
         algorithm="HS256",
     )

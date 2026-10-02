@@ -31,7 +31,7 @@ class MonzoTokenResponseError(Exception):
     """Monzo returned an unusable token response."""
 
 
-def decode_user_id(token: str, settings: Settings) -> str:
+def decode_user_id(token: str, settings: Settings, session_factory) -> str:
     if not settings.jwt_secret_key:
         raise TokenStorageError("Session signing is not configured")
 
@@ -40,7 +40,7 @@ def decode_user_id(token: str, settings: Settings) -> str:
             token,
             settings.jwt_secret_key,
             algorithms=["HS256"],
-            options={"require": ["sub", "exp"]},
+            options={"require": ["sub", "exp", "ver"]},
         )
     except jwt.InvalidTokenError as exc:
         raise SessionAuthenticationError from exc
@@ -48,6 +48,13 @@ def decode_user_id(token: str, settings: Settings) -> str:
     user_id = claims["sub"]
     if not isinstance(user_id, str) or not user_id:
         raise SessionAuthenticationError
+    try:
+        with session_factory() as session:
+            credential = session.get(MonzoCredential, user_id)
+            if credential is not None and claims["ver"] != credential.session_version:
+                raise SessionAuthenticationError
+    except SQLAlchemyError as exc:
+        raise TokenStorageError("Token storage is unavailable") from None
     return user_id
 
 

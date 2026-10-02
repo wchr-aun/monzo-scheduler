@@ -24,6 +24,7 @@ class MonzoCredential(Base):
     access_token: Mapped[str] = mapped_column(String, nullable=False)
     refresh_token: Mapped[str | None] = mapped_column(String, nullable=True)
     token_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    session_version: Mapped[int] = mapped_column(default=0, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

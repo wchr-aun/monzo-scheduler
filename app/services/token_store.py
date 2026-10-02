@@ -23,6 +23,7 @@ def save_monzo_tokens(
     credential.access_token = token_response.access_token
     credential.refresh_token = token_response.refresh_token
     credential.token_type = token_response.token_type
+    credential.session_version = (credential.session_version or 0) + 1
     credential.expires_at = now + timedelta(seconds=token_response.expires_in)
     credential.updated_at = now
     session.commit()
@@ -30,6 +31,7 @@ def save_monzo_tokens(
     return jwt.encode(
         {
             "sub": token_response.user_id,
+            "ver": credential.session_version,
             "iat": now,
             "exp": now + timedelta(seconds=settings.jwt_expiration_seconds),
         },

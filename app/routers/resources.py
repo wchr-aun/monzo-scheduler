@@ -48,10 +48,10 @@ class MonzoSession:
     access_token: str
 
 
-async def monzo_session(
+async def authenticated_user_id(
     request: Request,
     authorization: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> MonzoSession:
+) -> str:
     if authorization is None:
         logger.warning(
             "authentication_failed path=%s reason=bearer_token_missing",
@@ -63,19 +63,34 @@ async def monzo_session(
         user_id = decode_user_id(
             authorization.credentials,
             request.app.state.settings,
-        )
-        access_token = await resolve_monzo_access_token(
-            user_id,
             request.app.state.session_factory,
-            request.app.state.settings,
         )
-        return MonzoSession(user_id=user_id, access_token=access_token)
+        return user_id
     except SessionAuthenticationError:
         logger.warning(
             "authentication_failed path=%s reason=invalid_or_expired_jwt",
             request.url.path,
         )
         _raise_unauthorized("Invalid or expired bearer token")
+    except TokenStorageError as exc:
+        logger.error(
+            "credential_resolution_failed path=%s reason=storage_or_configuration",
+            request.url.path,
+        )
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+async def monzo_session(
+    request: Request,
+    user_id: str = Depends(authenticated_user_id),
+) -> MonzoSession:
+    try:
+        access_token = await resolve_monzo_access_token(
+            user_id,
+            request.app.state.session_factory,
+            request.app.state.settings,
+        )
+        return MonzoSession(user_id=user_id, access_token=access_token)
     except MonzoConnectionError:
         logger.warning(
             "authentication_failed path=%s reason=monzo_connection_unavailable",

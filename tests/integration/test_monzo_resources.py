@@ -13,7 +13,7 @@ from app.db.models import MonzoCredential
 def _session_token(settings, user_id="user_test123"):
     now = datetime.now(timezone.utc)
     return jwt.encode(
-        {"sub": user_id, "iat": now, "exp": now + timedelta(hours=1)},
+        {"sub": user_id, "ver": 0, "iat": now, "exp": now + timedelta(hours=1)},
         settings.jwt_secret_key,
         algorithm="HS256",
     )
@@ -436,6 +436,18 @@ def test_accounts_with_balances_rejects_jwt_without_stored_credentials(
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Monzo connection is missing or expired"
+
+
+def test_logout_revokes_existing_application_token(client, settings):
+    _save_credential(client)
+    token = _session_token(settings)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    logout = client.post("/logout", headers=headers)
+    after_logout = client.get("/scheduled-transfers", headers=headers)
+
+    assert logout.status_code == 204
+    assert after_logout.status_code == 401
 
 
 def test_authentication_failure_is_traceable_without_logging_token(client, caplog):
