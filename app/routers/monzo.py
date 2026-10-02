@@ -1,9 +1,10 @@
 import logging
-from uuid import uuid6
+import secrets
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -23,7 +24,7 @@ def monzo_redirect(request: Request):
         logger.error("oauth_redirect_failed reason=oauth_not_configured")
         raise HTTPException(status_code=503, detail="Monzo OAuth is not configured")
 
-    state = uuid6().hex
+    state = secrets.token_urlsafe(32)
     request.app.state.oauth_states.add(state)
     url = httpx.URL(
         "https://auth.monzo.com/",
@@ -34,13 +35,25 @@ def monzo_redirect(request: Request):
             "state": state,
         },
     )
-    return RedirectResponse(str(url), status_code=status.HTTP_302_FOUND)
+    response = RedirectResponse(str(url), status_code=status.HTTP_302_FOUND)
+    response.set_cookie(
+        "monzo_oauth_state",
+        state,
+        httponly=True,
+        secure=urlparse(settings.monzo_redirect_uri).scheme == "https",
+        samesite="lax",
+        path="/monzo-callback",
+        max_age=600,
+    )
+    return response
 
 
 @router.get("/monzo-callback")
 async def monzo_callback(request: Request, code: str, state: str):
     states = request.app.state.oauth_states
-    if state not in states:
+    if state not in states or not secrets.compare_digest(
+        state, request.cookies.get("monzo_oauth_state", "")
+    ):
         logger.warning("oauth_callback_failed reason=invalid_state")
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
     states.remove(state)
@@ -84,7 +97,11 @@ async def monzo_callback(request: Request, code: str, state: str):
         logger.error("oauth_callback_failed reason=token_storage_unavailable")
         raise HTTPException(status_code=503, detail="Token storage is unavailable") from exc
 
-    return {
-        "token": session_token,
-        "expiresIn": settings.jwt_expiration_seconds,
-    }
+    response = JSONResponse(
+        {
+            "token": session_token,
+            "expiresIn": settings.jwt_expiration_seconds,
+        }
+    )
+    response.delete_cookie("monzo_oauth_state", path="/monzo-callback")
+    return response
