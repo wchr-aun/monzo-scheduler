@@ -46,6 +46,13 @@ class ScheduleNotFoundError(LookupError):
     """The requested setup does not exist for the authenticated user."""
 
 
+class ScheduleQuotaExceededError(ValueError):
+    """The user has reached the active schedule limit."""
+
+
+MAX_ACTIVE_SCHEDULES_PER_USER = 50
+
+
 @dataclass(frozen=True)
 class TransferExecution:
     setup_id: str
@@ -163,6 +170,16 @@ def schedule_transfer(
     current_time = (now or datetime.now(timezone.utc)).astimezone(UK_TIMEZONE)
     if scheduled_at <= current_time:
         raise InvalidScheduleError("datetime must be in the future")
+
+    with session_factory() as session:
+        active_count = session.scalar(
+            select(func.count()).select_from(ScheduledTransferSetup).where(
+                ScheduledTransferSetup.user_id == user_id,
+                ScheduledTransferSetup.status == "active",
+            )
+        )
+    if active_count >= MAX_ACTIVE_SCHEDULES_PER_USER:
+        raise ScheduleQuotaExceededError
 
     setup_id = str(uuid6())
     setup = ScheduledTransferSetup(

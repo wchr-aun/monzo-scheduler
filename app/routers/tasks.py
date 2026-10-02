@@ -23,6 +23,7 @@ from app.schemas.tasks import (
 from app.services.scheduler import (
     InvalidScheduleError,
     ScheduleNotFoundError,
+    ScheduleQuotaExceededError,
     cancel_scheduled_transfer,
     emergency_stop_user_transfers,
     list_scheduled_transfers,
@@ -163,6 +164,8 @@ def create_scheduled_transfer(
         )
     except InvalidScheduleError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ScheduleQuotaExceededError as exc:
+        raise HTTPException(status_code=429, detail="Active schedule limit reached") from exc
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=503,

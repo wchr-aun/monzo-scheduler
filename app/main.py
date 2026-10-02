@@ -5,10 +5,12 @@ from uuid import uuid6
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request
 from cryptography.fernet import Fernet
+from fastapi.responses import JSONResponse
 
 from app.config import Settings
 from app.db.session import create_database_engine, create_session_factory
 from app.observability import configure_logging, get_logger
+from app.rate_limit import RequestRateLimiter
 from app.routers import health, monzo, resources, tasks
 from app.services.scheduler import restore_scheduled_transfers
 
@@ -36,7 +38,8 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
         application.state.settings = settings
         application.state.database_engine = database_engine
         application.state.session_factory = session_factory
-        application.state.oauth_states = set()
+        application.state.oauth_states = {}
+        application.state.request_rate_limiter = RequestRateLimiter()
         try:
             yield
         finally:
@@ -51,6 +54,12 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
         request_id = uuid6().hex
         request.state.request_id = request_id
         started_at = monotonic()
+        client_host = request.client.host if request.client is not None else "unknown"
+        if not request.app.state.request_rate_limiter.allow(client_host):
+            response = JSONResponse(status_code=429, content={"detail": "Too many requests"})
+            response.headers["X-Request-ID"] = request_id
+            response.headers["Retry-After"] = "60"
+            return response
         try:
             response = await call_next(request)
         except Exception as exc:
