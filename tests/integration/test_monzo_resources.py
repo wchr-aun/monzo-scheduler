@@ -189,7 +189,7 @@ def test_accounts_endpoint_is_removed(client):
     assert response.status_code == 404
 
 
-def test_accounts_surfaces_monzo_error_in_response_and_logs(client, settings, caplog):
+def test_accounts_returns_sanitized_monzo_error_and_logs_code(client, settings, caplog):
     _save_credential(client)
     caplog.set_level(logging.WARNING)
     with respx.mock(assert_all_called=True) as monzo_mock:
@@ -205,16 +205,13 @@ def test_accounts_surfaces_monzo_error_in_response_and_logs(client, settings, ca
         )
 
     assert response.status_code == 403
-    assert response.json() == {
-        "code": "forbidden",
-        "message": "User approval required",
-    }
+    assert response.json() == {"detail": "Monzo request failed"}
     assert "monzo_request_failed operation=accounts upstream_status=403" in caplog.text
     assert "monzo_code='forbidden'" in caplog.text
-    assert "monzo_message='User approval required'" in caplog.text
+    assert "monzo_message='upstream_error'" in caplog.text
 
 
-def test_accounts_passes_through_unapproved_monzo_access(client, settings, caplog):
+def test_accounts_sanitizes_unapproved_monzo_error(client, settings, caplog):
     _save_credential(client)
     caplog.set_level(logging.WARNING)
     with respx.mock(assert_all_called=True) as monzo_mock:
@@ -233,12 +230,9 @@ def test_accounts_passes_through_unapproved_monzo_access(client, settings, caplo
         )
 
     assert response.status_code == 403
-    assert response.json() == {
-        "code": "forbidden",
-        "message": "Access forbidden due to insufficient permissions.",
-    }
+    assert response.json() == {"detail": "Monzo request failed"}
     assert "monzo_code='forbidden'" in caplog.text
-    assert "monzo_message='Access forbidden due to insufficient permissions.'" in caplog.text
+    assert "monzo_message='upstream_error'" in caplog.text
 
 
 def test_accounts_with_balances_only_returns_fields_in_service_schema(

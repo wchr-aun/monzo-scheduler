@@ -1,6 +1,7 @@
 """Logging helpers for request and application diagnostics."""
 
 import logging
+import re
 from typing import Any
 
 LOGGER_NAME = "schedzo"
@@ -51,8 +52,10 @@ def monzo_error_details(response: Any) -> tuple[str, str]:
         return "unknown", "unknown"
 
     code = payload.get("code", payload.get("error", "unknown"))
-    message = payload.get("message", payload.get("error_description", "unknown"))
-    return _safe_log_value(code), _safe_log_value(message)
+    code = _safe_log_value(code)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", code):
+        code = "unknown"
+    return code, "upstream_error"
 
 
 def _safe_log_value(value: Any) -> str:

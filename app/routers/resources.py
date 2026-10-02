@@ -6,6 +6,7 @@ from typing import Literal, Never, TypeVar
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ValidationError
 
@@ -249,10 +250,9 @@ def _validate_completed_response(
             error_code,
             error_message,
         )
-        return Response(
-            content=response.content,
+        return JSONResponse(
+            content={"detail": "Monzo request failed"},
             status_code=response.status_code,
-            media_type=response.headers.get("content-type"),
         )
 
     try:
