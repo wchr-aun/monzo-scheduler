@@ -172,6 +172,30 @@ def test_schedule_endpoint_enforces_active_schedule_quota(client, settings):
     assert response.status_code == 429
 
 
+@pytest.mark.parametrize("pot_id", ["../accounts", "pot/a", "pot?x=1"])
+def test_schedule_endpoint_rejects_pot_ids_that_can_change_api_path(
+    client, settings, pot_id
+):
+    _save_credential(client)
+    scheduled_at = (datetime.now(UK_TIMEZONE) + timedelta(days=2)).replace(
+        second=0, microsecond=0
+    )
+    response = client.post(
+        "/schedule-transfer",
+        headers={"Authorization": f"Bearer {_session_token(settings)}"},
+        json={
+            "datetime": scheduled_at.isoformat(),
+            "interval": "weekly",
+            "type": "deposit",
+            "amount": 100,
+            "pot_id": pot_id,
+            "account_id": "acc_123",
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
     client, settings
 ):

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Literal, Never, TypeVar
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ValidationError
 
@@ -184,7 +184,7 @@ def _optional_balance(response: BalanceResult) -> BalanceResponse | None:
 
 @router.get("/balance", response_model=BalanceResponse)
 async def balance(
-    account_id: str,
+    account_id: str = Query(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9_-]+$"),
     access_token: str = Depends(monzo_access_token),
 ) -> BalanceResponse | Response:
     return await _validate_response(
@@ -196,7 +196,9 @@ async def balance(
 
 @router.get("/pots", response_model=PotsResponse)
 async def pots(
-    current_account_id: str,
+    current_account_id: str = Query(
+        min_length=1, max_length=255, pattern=r"^[A-Za-z0-9_-]+$"
+    ),
     access_token: str = Depends(monzo_access_token),
 ) -> PotsResponse | Response:
     return await _validate_response(

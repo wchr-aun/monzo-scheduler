@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Awaitable
+from urllib.parse import quote
 
 import httpx
 
@@ -92,7 +93,7 @@ async def deposit_into_pot(
     dedupe_id: str,
 ) -> httpx.Response:
     return await _put(
-        f"/pots/{pot_id}/deposit",
+        f"/pots/{quote(pot_id, safe='')}/deposit",
         access_token,
         data={
             "source_account_id": account_id,
@@ -110,7 +111,7 @@ async def withdraw_from_pot(
     dedupe_id: str,
 ) -> httpx.Response:
     return await _put(
-        f"/pots/{pot_id}/withdraw",
+        f"/pots/{quote(pot_id, safe='')}/withdraw",
         access_token,
         data={
             "destination_account_id": account_id,
