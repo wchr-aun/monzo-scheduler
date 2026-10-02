@@ -87,7 +87,7 @@ class ScheduledTransfer(Base):
     __tablename__ = "scheduled_transfers"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'completed', 'failed', 'cancelled')",
+            "status IN ('pending', 'running', 'completed', 'failed', 'cancelled')",
             name="ck_scheduled_transfers_status",
         ),
     )
