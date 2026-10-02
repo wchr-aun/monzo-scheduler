@@ -15,6 +15,18 @@ After completing the Monzo OAuth flow, send the returned application token as
 - `DELETE /schedule-transfer/<setup_id>`
 - `POST /logout` to revoke application sessions
 - `POST /emergency-stop` to revoke sessions, deactivate schedules, and cancel pending transfers
+- `POST /auth/refresh` to rotate an application refresh token
+
+The OAuth callback also returns a `refreshToken`. The frontend BFF should keep
+it in its server-side session or a `Secure`, `HttpOnly` cookie and must not
+expose it to browser JavaScript. When the 10-minute application JWT expires,
+the BFF can call `POST /auth/refresh` with `{"refreshToken":"..."}`. The
+response contains a new `token`, a rotated `refreshToken`, `expiresIn`, and
+`refreshExpiresIn`. Each successful refresh resets the 60-day inactivity
+window. A refresh token can be used only once; BFF refresh requests should be
+serialized where possible. If duplicate requests arrive together, the backend
+accepts retries of the previous token for 30 seconds and returns the same
+rotated refresh token, so the BFF does not lose its session to a race.
 
 Schedule requests use a timezone-aware UK local datetime, a positive amount in
 minor currency units, and one of the `daily`, `weekly`, or `monthly` intervals:

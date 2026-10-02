@@ -23,6 +23,7 @@ from app.services.authorization import (
     MonzoTokenResponseError,
     SessionAuthenticationError,
     TokenStorageError,
+    decode_app_session_id,
     decode_user_id,
     resolve_monzo_access_token,
 )
@@ -65,6 +66,9 @@ async def authenticated_user_id(
             authorization.credentials,
             request.app.state.settings,
             request.app.state.session_factory,
+        )
+        request.state.app_session_id = decode_app_session_id(
+            authorization.credentials, request.app.state.settings
         )
         return user_id
     except SessionAuthenticationError:

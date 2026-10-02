@@ -1,4 +1,5 @@
 from urllib.parse import parse_qs, urlparse
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import jwt
@@ -6,7 +7,8 @@ import respx
 from fastapi.testclient import TestClient
 
 from app.db.models import MonzoCredential
-from app.services.token_store import decrypt_token
+from app.schemas.monzo import MonzoTokenResponse
+from app.services.token_store import decrypt_token, save_monzo_tokens
 
 
 def test_oauth_state_is_bound_to_the_browser_cookie(client):
@@ -87,3 +89,30 @@ def test_oauth_redirect_and_token_exchange_happy_path(client, settings):
         "redirect_uri": [settings.monzo_redirect_uri],
         "code": ["authorization-code"],
     }
+
+
+def test_concurrent_app_refresh_requests_share_the_rotated_token(client, settings):
+    with client.app.state.session_factory() as session:
+        token_pair = save_monzo_tokens(
+            MonzoTokenResponse(
+                user_id="user_test123",
+                access_token="test-access-token",
+                refresh_token="test-monzo-refresh-token",
+                expires_in=21600,
+            ),
+            session,
+            settings,
+        )
+
+    def refresh():
+        return client.post(
+            "/auth/refresh",
+            json={"refresh_token": token_pair.refresh_token},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        responses = list(executor.map(lambda _: refresh(), range(2)))
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert responses[0].json()["refreshToken"] == responses[1].json()["refreshToken"]
+    assert responses[0].json()["refreshToken"] != token_pair.refresh_token

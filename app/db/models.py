@@ -1,5 +1,5 @@
 from datetime import date, datetime, timezone
-from uuid import uuid6
+from uuid import uuid4, uuid6
 
 from sqlalchemy import (
     BigInteger,
@@ -32,6 +32,34 @@ class MonzoCredential(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
+    )
+
+
+class AppSession(Base):
+    __tablename__ = "app_sessions"
+
+    session_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("monzo_credentials.user_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    session_version: Mapped[int] = mapped_column(nullable=False)
+    refresh_token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    refresh_token_ciphertext: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    previous_refresh_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    previous_refresh_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
 

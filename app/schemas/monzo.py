@@ -14,6 +14,16 @@ class MonzoTokenResponse(BaseModel):
     user_id: str = Field(min_length=1)
 
 
+class AppRefreshRequest(BaseModel):
+    """Refresh credential submitted by the frontend BFF."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    refresh_token: str = Field(
+        min_length=32, max_length=256, alias="refreshToken"
+    )
+
+
 class Account(BaseModel):
     """Account details exposed by this service."""
 

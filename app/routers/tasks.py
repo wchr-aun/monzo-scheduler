@@ -1,4 +1,5 @@
 from typing import Annotated
+from datetime import datetime, timezone
 
 from fastapi import (
     APIRouter,
@@ -12,7 +13,7 @@ from fastapi import (
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.routers.resources import MonzoSession, authenticated_user_id, monzo_session
-from app.db.models import MonzoCredential
+from app.db.models import AppSession, MonzoCredential
 from app.schemas.tasks import (
     UK_TIMEZONE,
     ScheduleTransferRequest,
@@ -47,10 +48,18 @@ def logout(
 ) -> Response:
     try:
         with request.app.state.session_factory() as session:
-            credential = session.get(MonzoCredential, user_id)
-            if credential is not None:
-                credential.session_version += 1
-                session.commit()
+            app_session_id = getattr(request.state, "app_session_id", None)
+            if app_session_id is not None:
+                app_session = session.get(AppSession, app_session_id)
+                if app_session is not None and app_session.user_id == user_id:
+                    app_session.revoked_at = datetime.now(timezone.utc)
+                    session.commit()
+            else:
+                # Legacy access JWTs have no per-session identifier.
+                credential = session.get(MonzoCredential, user_id)
+                if credential is not None:
+                    credential.session_version += 1
+                    session.commit()
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=503, detail="Session storage is unavailable") from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)

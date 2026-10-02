@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import Settings
-from app.db.models import MonzoCredential
+from app.db.models import AppSession, MonzoCredential
 from app.observability import get_logger, monzo_error_details
 from app.services.monzo import refresh_access_token
 from app.services.token_store import decrypt_token, encrypt_token
@@ -53,14 +53,40 @@ def decode_user_id(token: str, settings: Settings, session_factory) -> str:
     user_id = claims["sub"]
     if not isinstance(user_id, str) or not user_id:
         raise SessionAuthenticationError
+    session_id = claims.get("sid")
     try:
         with session_factory() as session:
             credential = session.get(MonzoCredential, user_id)
             if credential is not None and claims["ver"] != credential.session_version:
                 raise SessionAuthenticationError
+            if session_id is not None:
+                app_session = session.get(AppSession, session_id)
+                if (
+                    app_session is None
+                    or app_session.user_id != user_id
+                    or app_session.revoked_at is not None
+                    or app_session.session_version != claims["ver"]
+                    or app_session.expires_at.replace(tzinfo=timezone.utc)
+                    <= datetime.now(timezone.utc)
+                ):
+                    raise SessionAuthenticationError
     except SQLAlchemyError as exc:
         raise TokenStorageError("Token storage is unavailable") from None
     return user_id
+
+
+def decode_app_session_id(token: str, settings: Settings) -> str | None:
+    try:
+        claims = jwt.decode(
+            token,
+            settings.jwt_secret_key,
+            algorithms=["HS256"],
+            options={"require": ["sub", "exp", "ver"]},
+        )
+    except jwt.InvalidTokenError as exc:
+        raise SessionAuthenticationError from exc
+    session_id = claims.get("sid")
+    return session_id if isinstance(session_id, str) else None
 
 
 async def resolve_monzo_access_token(user_id: str, session_factory, settings: Settings) -> str:

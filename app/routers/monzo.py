@@ -9,15 +9,30 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.config import Settings
 from app.observability import monzo_error_details
-from app.schemas.monzo import MonzoTokenResponse
+from app.schemas.monzo import AppRefreshRequest, MonzoTokenResponse
 from app.services.monzo import exchange_authorization_code
-from app.services.token_store import save_monzo_tokens
+from app.services.token_store import (
+    APP_REFRESH_TOKEN_TTL,
+    AppTokenPair,
+    rotate_app_refresh_token,
+    save_monzo_tokens,
+)
 
 router = APIRouter(tags=["monzo"])
 logger = logging.getLogger("schedzo.oauth")
 OAUTH_STATE_TTL_SECONDS = 600
 MAX_PENDING_OAUTH_STATES = 1000
+
+
+def _token_pair_response(token_pair: AppTokenPair, settings: Settings) -> dict[str, str | int]:
+    return {
+        "token": token_pair.access_token,
+        "expiresIn": settings.jwt_expiration_seconds,
+        "refreshToken": token_pair.refresh_token,
+        "refreshExpiresIn": int(APP_REFRESH_TOKEN_TTL.total_seconds()),
+    }
 
 
 @router.get("/monzo-redirect")
@@ -103,15 +118,14 @@ async def monzo_callback(request: Request, code: str, state: str):
 
     try:
         with request.app.state.session_factory() as session:
-            session_token = save_monzo_tokens(token_response, session, settings)
+            token_pair = save_monzo_tokens(token_response, session, settings)
     except SQLAlchemyError as exc:
         logger.error("oauth_callback_failed reason=token_storage_unavailable")
         raise HTTPException(status_code=503, detail="Token storage is unavailable") from exc
 
     response = JSONResponse(
         {
-            "token": session_token,
-            "expiresIn": settings.jwt_expiration_seconds,
+            **_token_pair_response(token_pair, settings),
         },
         headers={
             "Cache-Control": "no-store",
@@ -121,3 +135,22 @@ async def monzo_callback(request: Request, code: str, state: str):
     )
     response.delete_cookie("monzo_oauth_state", path="/monzo-callback")
     return response
+
+
+@router.post("/auth/refresh")
+def refresh_app_session(body: AppRefreshRequest, request: Request):
+    settings = request.app.state.settings
+    try:
+        token_pair = rotate_app_refresh_token(
+            body.refresh_token, request.app.state.session_factory, settings
+        )
+    except SQLAlchemyError as exc:
+        logger.error("app_token_refresh_failed reason=session_storage_unavailable")
+        raise HTTPException(status_code=503, detail="Session storage is unavailable") from exc
+    if token_pair is None:
+        logger.warning("app_token_refresh_failed reason=invalid_or_expired_refresh_token")
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+    return JSONResponse(
+        _token_pair_response(token_pair, settings),
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )
