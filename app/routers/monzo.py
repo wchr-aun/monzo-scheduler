@@ -112,7 +112,12 @@ async def monzo_callback(request: Request, code: str, state: str):
         {
             "token": session_token,
             "expiresIn": settings.jwt_expiration_seconds,
-        }
+        },
+        headers={
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+            "Referrer-Policy": "no-referrer",
+        },
     )
     response.delete_cookie("monzo_oauth_state", path="/monzo-callback")
     return response

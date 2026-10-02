@@ -61,6 +61,9 @@ def test_oauth_redirect_and_token_exchange_happy_path(client, settings):
     assert callback.status_code == 200
     response_body = callback.json()
     assert response_body["expiresIn"] == 900
+    assert callback.headers["cache-control"] == "no-store"
+    assert callback.headers["pragma"] == "no-cache"
+    assert callback.headers["referrer-policy"] == "no-referrer"
     assert 'monzo_oauth_state="";' in callback.headers["set-cookie"]
     assert state not in client.app.state.oauth_states
     jwt_claims = jwt.decode(
