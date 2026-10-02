@@ -203,6 +203,7 @@ def test_get_scheduled_transfers_calls_scheduler_service(monkeypatch, client):
     assert called["pot_id"] == "pot-123"
     assert [status.value for status in called["statuses"]] == [
         "pending",
+        "running",
         "completed",
         "failed",
     ]
@@ -260,9 +261,7 @@ def test_create_task_endpoint_is_removed(client):
 
 
 def test_monzo_redirect_requires_client_id(settings):
-    settings = settings.__class__(
-        "", settings.monzo_client_secret, settings.monzo_redirect_uri
-    )
+    settings = replace(settings, monzo_client_id="")
 
     with _client_for_settings(settings) as client:
         response = client.get("/monzo-redirect")
@@ -289,9 +288,7 @@ def test_monzo_callback_rejects_expired_state(client):
 
 
 def test_monzo_callback_requires_both_credentials(settings):
-    settings = settings.__class__(
-        settings.monzo_client_id, "", settings.monzo_redirect_uri
-    )
+    settings = replace(settings, monzo_client_secret="")
     with _client_for_settings(settings) as client:
         client.app.state.oauth_states["valid"] = monotonic()
         client.cookies.set("monzo_oauth_state", "valid", path="/monzo-callback")
@@ -305,15 +302,9 @@ def test_monzo_callback_requires_both_credentials(settings):
 
 def test_monzo_callback_requires_jwt_configuration(settings):
     incomplete_settings = replace(settings, jwt_secret_key="")
-    with _client_for_settings(incomplete_settings) as client:
-        client.app.state.oauth_states["valid"] = monotonic()
-        client.cookies.set("monzo_oauth_state", "valid", path="/monzo-callback")
-        response = client.get(
-            "/monzo-callback", params={"code": "code", "state": "valid"}
-        )
-
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Session signing is not configured"
+    with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
+        with _client_for_settings(incomplete_settings):
+            pass
 
 
 @pytest.mark.parametrize("token_response", [{}, {"user_id": "user-1"}])
