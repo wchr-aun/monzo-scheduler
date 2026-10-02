@@ -40,6 +40,18 @@ def test_health_route(client):
 
     assert response.status_code == 200
     assert response.json() == {"message": "ok"}
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "no-referrer"
+
+
+def test_health_route_adds_hsts_over_https(client):
+    response = client.get("https://testserver/health")
+
+    assert response.status_code == 200
+    assert response.headers["strict-transport-security"] == (
+        "max-age=31536000; includeSubDomains"
+    )
 
 
 def test_schedule_transfer_calls_scheduler_service(monkeypatch, client):

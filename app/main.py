@@ -63,6 +63,7 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
             response = JSONResponse(status_code=429, content={"detail": "Too many requests"})
             response.headers["X-Request-ID"] = request_id
             response.headers["Retry-After"] = "60"
+            _add_security_headers(response, request)
             return response
         try:
             response = await call_next(request)
@@ -79,6 +80,7 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
             raise
 
         response.headers["X-Request-ID"] = request_id
+        _add_security_headers(response, request)
         if response.status_code >= 400:
             log = logger.error if response.status_code >= 500 else logger.warning
             log(
@@ -97,6 +99,16 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
     application.include_router(monzo.router)
     application.include_router(resources.router)
     return application
+
+
+def _add_security_headers(response, request: Request) -> None:
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    if request.url.scheme == "https":
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
 
 
 app = create_app()
