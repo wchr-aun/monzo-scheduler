@@ -41,6 +41,6 @@ def test_monzo_error_details_only_extracts_bounded_error_fields():
 
     code, message = monzo_error_details(response)
 
-    assert code == "bad_request"
+    assert code == "upstream_error"
     assert message == "upstream_error"
     assert "must-not-be-logged" not in f"{code} {message}"

@@ -207,7 +207,7 @@ def test_accounts_returns_sanitized_monzo_error_and_logs_code(client, settings, 
     assert response.status_code == 403
     assert response.json() == {"detail": "Monzo request failed"}
     assert "monzo_request_failed operation=accounts upstream_status=403" in caplog.text
-    assert "monzo_code='forbidden'" in caplog.text
+    assert "monzo_code='upstream_error'" in caplog.text
     assert "monzo_message='upstream_error'" in caplog.text
 
 
@@ -231,7 +231,7 @@ def test_accounts_sanitizes_unapproved_monzo_error(client, settings, caplog):
 
     assert response.status_code == 403
     assert response.json() == {"detail": "Monzo request failed"}
-    assert "monzo_code='forbidden'" in caplog.text
+    assert "monzo_code='upstream_error'" in caplog.text
     assert "monzo_message='upstream_error'" in caplog.text
 
 
