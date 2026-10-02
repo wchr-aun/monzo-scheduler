@@ -64,7 +64,6 @@ async def monzo_callback(request: Request, code: str, state: str):
             exc.response.status_code,
             error_code,
             error_message,
-            exc_info=True,
         )
         raise HTTPException(
             status_code=exc.response.status_code, detail="Monzo token exchange failed"
@@ -72,7 +71,6 @@ async def monzo_callback(request: Request, code: str, state: str):
     except httpx.RequestError as exc:
         logger.error(
             "oauth_token_exchange_failed reason=monzo_unreachable",
-            exc_info=True,
         )
         raise HTTPException(status_code=503, detail="Monzo API is unreachable") from exc
     except (ValidationError, ValueError) as exc:

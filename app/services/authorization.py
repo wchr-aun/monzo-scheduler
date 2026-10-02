@@ -61,7 +61,7 @@ async def resolve_monzo_access_token(user_id: str, session_factory, settings: Se
             refresh_token = credential.refresh_token
             expires_at = credential.expires_at
     except SQLAlchemyError as exc:
-        raise TokenStorageError("Token storage is unavailable") from exc
+        raise TokenStorageError("Token storage is unavailable") from None
 
     if _as_utc(expires_at) > datetime.now(timezone.utc):
         return access_token
@@ -80,7 +80,6 @@ async def resolve_monzo_access_token(user_id: str, session_factory, settings: Se
             exc.response.status_code,
             error_code,
             error_message,
-            exc_info=True,
         )
         if exc.response.status_code in {400, 401, 403}:
             raise MonzoConnectionError from exc
@@ -104,7 +103,7 @@ async def resolve_monzo_access_token(user_id: str, session_factory, settings: Se
             credential.updated_at = now
             session.commit()
     except SQLAlchemyError as exc:
-        raise TokenStorageError("Token storage is unavailable") from exc
+        raise TokenStorageError("Token storage is unavailable") from None
 
     return refreshed.access_token
 

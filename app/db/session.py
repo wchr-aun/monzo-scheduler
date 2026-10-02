@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker
 
 def create_database_engine(database_url: str) -> Engine:
     options = {"connect_args": {"check_same_thread": False}} if database_url.startswith("sqlite") else {}
-    return create_engine(database_url, **options)
+    return create_engine(database_url, hide_parameters=True, **options)
 
 
 def create_session_factory(engine: Engine):

@@ -289,11 +289,11 @@ def execute_scheduled_transfer(
                 settings,
             )
         )
-    except Exception:
+    except Exception as exc:
         logger.error(
-            "scheduled_transfer_failed transfer_id=%s",
+            "scheduled_transfer_failed transfer_id=%s exception_type=%s",
             transfer_id,
-            exc_info=True,
+            type(exc).__name__,
         )
         raise
 
@@ -424,7 +424,6 @@ async def _notify_transfer_result(
         logger.warning(
             "scheduled_transfer_feed_failed transfer_id=%s",
             transfer_id,
-            exc_info=True,
         )
 
 
@@ -470,11 +469,11 @@ def _load_pending_execution(
                 pot_id=setup.pot_id,
                 account_id=setup.account_id,
             )
-    except SQLAlchemyError:
+    except SQLAlchemyError as exc:
         logger.error(
-            "scheduled_transfer_storage_failed transfer_id=%s",
+            "scheduled_transfer_storage_failed transfer_id=%s exception_type=%s",
             transfer_id,
-            exc_info=True,
+            type(exc).__name__,
         )
         raise
 

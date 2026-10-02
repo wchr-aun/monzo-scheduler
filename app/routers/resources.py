@@ -101,7 +101,6 @@ async def monzo_session(
         logger.error(
             "credential_refresh_failed path=%s reason=monzo_unreachable",
             request.url.path,
-            exc_info=True,
         )
         raise HTTPException(status_code=503, detail="Monzo API is unreachable") from exc
     except httpx.HTTPStatusError as exc:
@@ -153,7 +152,6 @@ def _optional_balance(response: BalanceResult) -> BalanceResponse | None:
     if isinstance(response, httpx.RequestError):
         logger.error(
             "monzo_request_failed operation=balance reason=monzo_unreachable",
-            exc_info=(type(response), response, response.__traceback__),
         )
         return None
 
@@ -214,7 +212,6 @@ async def _await_monzo_response(
         logger.error(
             "monzo_request_failed operation=%s reason=monzo_unreachable",
             operation,
-            exc_info=True,
         )
         raise HTTPException(status_code=503, detail="Monzo API is unreachable") from exc
 
