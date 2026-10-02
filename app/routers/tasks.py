@@ -24,6 +24,7 @@ from app.services.scheduler import (
     InvalidScheduleError,
     ScheduleNotFoundError,
     cancel_scheduled_transfer,
+    emergency_stop_user_transfers,
     list_scheduled_transfers,
     schedule_transfer,
 )
@@ -50,6 +51,24 @@ def logout(
                 session.commit()
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=503, detail="Session storage is unavailable") from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/emergency-stop", status_code=status.HTTP_204_NO_CONTENT)
+def emergency_stop(
+    request: Request,
+    user_id: str = Depends(authenticated_user_id),
+) -> Response:
+    try:
+        emergency_stop_user_transfers(
+            request.app.state.scheduler,
+            request.app.state.session_factory,
+            user_id,
+        )
+    except SQLAlchemyError as exc:
+        raise HTTPException(
+            status_code=503, detail="Scheduled transfer storage is unavailable"
+        ) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

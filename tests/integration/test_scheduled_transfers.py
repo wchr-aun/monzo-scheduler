@@ -95,6 +95,39 @@ def test_schedule_transfer_endpoint_persists_authenticated_users_task(
         assert transfer.executed_at is None
 
 
+def test_emergency_stop_cancels_pending_transfers_and_revokes_sessions(client, settings):
+    _save_credential(client)
+    token = _session_token(settings)
+    headers = {"Authorization": f"Bearer {token}"}
+    scheduled_at = (datetime.now(UK_TIMEZONE) + timedelta(days=2)).replace(
+        second=0, microsecond=0
+    )
+    created = client.post(
+        "/schedule-transfer",
+        headers=headers,
+        json={
+            "datetime": scheduled_at.isoformat(),
+            "interval": "weekly",
+            "type": "deposit",
+            "amount": 1250,
+            "pot_id": "pot_123",
+            "account_id": "acc_123",
+        },
+    ).json()
+
+    stopped = client.post("/emergency-stop", headers=headers)
+    old_session = client.get("/scheduled-transfers", headers=headers)
+
+    assert stopped.status_code == 204
+    assert old_session.status_code == 401
+    assert client.app.state.scheduler.get_job(created["transfer_id"]) is None
+    with client.app.state.session_factory() as session:
+        setup = session.get(ScheduledTransferSetup, created["setup_id"])
+        transfer = session.get(ScheduledTransfer, created["transfer_id"])
+        assert setup.status == "deactivated"
+        assert transfer.status == "cancelled"
+
+
 def test_get_scheduled_transfers_lists_default_statuses_for_authenticated_user(
     client, settings
 ):

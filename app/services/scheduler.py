@@ -17,7 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
-from app.db.models import ScheduledTransfer, ScheduledTransferSetup
+from app.db.models import MonzoCredential, ScheduledTransfer, ScheduledTransferSetup
 from app.observability import get_logger, monzo_error_details
 from app.schemas.tasks import (
     UK_TIMEZONE,
@@ -230,6 +230,43 @@ def cancel_scheduled_transfer(
     for transfer in pending:
         _remove_job_if_present(scheduler, transfer.transfer_id)
     return setup
+
+
+def emergency_stop_user_transfers(
+    scheduler: BackgroundScheduler,
+    session_factory: sessionmaker[Session],
+    user_id: str,
+) -> int:
+    """Deactivate a user's schedules and cancel all occurrences that have not started."""
+    with session_factory() as session:
+        setups = session.scalars(
+            select(ScheduledTransferSetup).where(
+                ScheduledTransferSetup.user_id == user_id,
+                ScheduledTransferSetup.status == "active",
+            )
+        ).all()
+        setup_ids = [setup.setup_id for setup in setups]
+        transfer_ids: list[str] = []
+        if setup_ids:
+            for setup in setups:
+                setup.status = "deactivated"
+            pending = session.scalars(
+                select(ScheduledTransfer).where(
+                    ScheduledTransfer.setup_id.in_(setup_ids),
+                    ScheduledTransfer.status == "pending",
+                )
+            ).all()
+            for transfer in pending:
+                transfer.status = "cancelled"
+                transfer_ids.append(transfer.transfer_id)
+        credential = session.get(MonzoCredential, user_id)
+        if credential is not None:
+            credential.session_version = (credential.session_version or 0) + 1
+        session.commit()
+
+    for transfer_id in transfer_ids:
+        _remove_job_if_present(scheduler, transfer_id)
+    return len(transfer_ids)
 
 
 def restore_scheduled_transfers(
