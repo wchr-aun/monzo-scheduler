@@ -34,6 +34,7 @@ router = APIRouter(tags=["tasks"])
 
 DEFAULT_TRANSFER_STATUSES = (
     TransferStatus.PENDING,
+    TransferStatus.RUNNING,
     TransferStatus.COMPLETED,
     TransferStatus.FAILED,
 )
