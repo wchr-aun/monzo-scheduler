@@ -114,8 +114,23 @@ per body (including chunked bodies), and allows ten seconds to receive the body.
 Excess requests receive 503, oversized bodies 413, and slow bodies 408. Configure
 matching or tighter connection/body limits at the production reverse proxy.
 
+Persistent abuse budgets limit each user to 100 schedule creations and 20 app
+session issuances per rolling day, plus 60 refresh rotations per rolling hour.
+Cancelled schedules still count toward the creation budget. Used-token hashes
+have indexed lookups; unknown refresh tokens do not scan session history.
+Maintenance runs at startup and hourly, removes sessions revoked for at least a
+day and their token hashes, along with expired sessions and OAuth state records. Transfer
+history and schedule definitions are retained indefinitely, including completed,
+failed, and cancelled transfers and deactivated schedules. Used-token hashes for
+live sessions are retained for reuse detection, so they accumulate over the
+session lifetime. Protect the database and any exports as financial data.
+
 OAuth and refresh retain the direct-client flow without a BFF shared-secret
 requirement. Serialize refresh requests per session and persist replacement tokens
 atomically. A lost refresh response can be retried within the five-second window
 while that rotation is still the latest and the process has not restarted. Clear the frontend session on authentication failure, logout, or
 emergency stop. A refresh quota 429 is temporary; retain the current token.
+
+Transfer amounts must be positive signed 64-bit integers. Schedule creation and
+explicit resume require a valid application session, without a recent-login
+requirement or application-level monetary caps.

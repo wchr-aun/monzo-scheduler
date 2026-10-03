@@ -13,6 +13,7 @@ from app.schemas.monzo import AppRefreshRequest, MonzoTokenResponse
 from app.services.monzo import exchange_authorization_code
 from app.services.token_store import (
     AppTokenPair,
+    AppSessionQuotaError,
     rotate_app_refresh_token,
     save_monzo_tokens,
 )
@@ -128,6 +129,10 @@ async def monzo_callback(request: Request, code: str, state: str):
     try:
         with request.app.state.session_factory() as session:
             token_pair = save_monzo_tokens(token_response, session, settings)
+    except AppSessionQuotaError:
+        raise HTTPException(
+            status_code=429, detail="Session issuance quota reached"
+        ) from None
     except SQLAlchemyError as exc:
         logger.error("oauth_callback_failed reason=token_storage_unavailable")
         raise HTTPException(
@@ -155,6 +160,12 @@ def refresh_app_session(body: AppRefreshRequest, request: Request):
         token_pair = rotate_app_refresh_token(
             body.refresh_token, request.app.state.session_factory, settings
         )
+    except AppSessionQuotaError:
+        raise HTTPException(
+            status_code=429,
+            detail="Session refresh quota reached",
+            headers={"Retry-After": "3600"},
+        ) from None
     except SQLAlchemyError as exc:
         logger.error("app_token_refresh_failed reason=session_storage_unavailable")
         raise HTTPException(

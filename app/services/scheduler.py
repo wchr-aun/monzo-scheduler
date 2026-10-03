@@ -56,6 +56,7 @@ class ScheduleQuotaExceededError(ValueError):
 
 
 MAX_ACTIVE_SCHEDULES_PER_USER = 50
+MAX_SCHEDULE_CREATIONS_PER_USER_PER_DAY = 100
 
 
 @dataclass(frozen=True)
@@ -184,6 +185,17 @@ def _schedule_transfer_unlocked(
         raise InvalidScheduleError("datetime must be in the future")
 
     with session_factory() as session:
+        created_today = session.scalar(
+            select(func.count())
+            .select_from(ScheduledTransferSetup)
+            .where(
+                ScheduledTransferSetup.user_id == user_id,
+                ScheduledTransferSetup.created_at
+                >= current_time.astimezone(timezone.utc) - timedelta(days=1),
+            )
+        )
+        if created_today >= MAX_SCHEDULE_CREATIONS_PER_USER_PER_DAY:
+            raise ScheduleQuotaExceededError
         active_count = session.scalar(
             select(func.count())
             .select_from(ScheduledTransferSetup)

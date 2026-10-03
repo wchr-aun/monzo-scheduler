@@ -3,6 +3,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 from threading import Lock
+from weakref import WeakValueDictionary
 
 import httpx
 import jwt
@@ -16,7 +17,7 @@ from app.services.monzo import refresh_access_token
 from app.services.token_store import decrypt_token, encrypt_token
 
 logger = get_logger(__name__)
-_refresh_locks: dict[str, Lock] = {}
+_refresh_locks: WeakValueDictionary[str, Lock] = WeakValueDictionary()
 _refresh_locks_guard = Lock()
 
 

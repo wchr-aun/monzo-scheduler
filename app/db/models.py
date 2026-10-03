@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     SmallInteger,
     String,
+    Index,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -78,6 +79,7 @@ class AppSession(Base):
 
 class UsedAppRefreshToken(Base):
     __tablename__ = "used_app_refresh_tokens"
+    __table_args__ = (Index("ix_used_refresh_session_time", "session_id", "used_at"),)
 
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     session_id: Mapped[str] = mapped_column(

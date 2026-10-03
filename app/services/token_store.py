@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import jwt
 from cryptography.fernet import Fernet
-from sqlalchemy import update
+from sqlalchemy import update, select, func
 from sqlalchemy.orm import Session
 
 from app.config import Settings
@@ -17,6 +17,14 @@ from app.services.refresh_replay import refresh_replay_cache
 from app.schemas.monzo import MonzoTokenResponse
 
 APP_REFRESH_TOKEN_TTL = timedelta(days=60)
+MAX_APP_SESSIONS_PER_USER_PER_DAY = 20
+MAX_REFRESHES_PER_USER_PER_HOUR = 60
+
+
+class AppSessionQuotaError(Exception):
+    """Persistent session issuance or refresh budget exceeded."""
+
+
 _REFRESH_LOCKS = tuple(Lock() for _ in range(32))
 
 
@@ -76,6 +84,16 @@ def save_monzo_tokens(
             raise ValueError("JWT_SECRET_KEY is not configured")
 
         now = datetime.now(timezone.utc)
+        issued_today = session.scalar(
+            select(func.count())
+            .select_from(AppSession)
+            .where(
+                AppSession.user_id == token_response.user_id,
+                AppSession.created_at >= now - timedelta(days=1),
+            )
+        )
+        if issued_today >= MAX_APP_SESSIONS_PER_USER_PER_DAY:
+            raise AppSessionQuotaError
         credential = session.get(MonzoCredential, token_response.user_id)
         if credential is None:
             credential = MonzoCredential(user_id=token_response.user_id)
@@ -191,6 +209,17 @@ def _rotate_app_refresh_token_locked(token_hash, session_id, session_factory, se
             return None
         if app_session.refresh_token_hash != token_hash:
             return None
+        recent_count = session.scalar(
+            select(func.count())
+            .select_from(UsedAppRefreshToken)
+            .join(AppSession)
+            .where(
+                AppSession.user_id == credential.user_id,
+                UsedAppRefreshToken.used_at >= now - timedelta(hours=1),
+            )
+        )
+        if recent_count >= MAX_REFRESHES_PER_USER_PER_HOUR:
+            raise AppSessionQuotaError
         next_token = secrets.token_urlsafe(48)
         result = session.execute(
             update(AppSession)

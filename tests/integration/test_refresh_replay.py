@@ -40,6 +40,25 @@ def test_retries_do_not_extend_window_and_expired_reuse_revokes(
     )
 
 
+def test_duplicates_do_not_use_rotation_quota(client, settings, monkeypatch):
+    pair = login(client, settings)
+    monkeypatch.setattr("app.services.token_store.MAX_REFRESHES_PER_USER_PER_HOUR", 1)
+    first = client.post("/auth/refresh", json={"refreshToken": pair.refresh_token})
+    assert first.status_code == 200
+    retry = client.post("/auth/refresh", json={"refreshToken": pair.refresh_token})
+    assert retry.status_code == 200
+    assert retry.json() == first.json()
+    with client.app.state.session_factory() as session:
+        assert session.query(UsedAppRefreshToken).count() == 1
+        assert session.query(AppSession).one().revoked_at is None
+    assert (
+        client.post(
+            "/auth/refresh", json={"refreshToken": first.json()["refreshToken"]}
+        ).status_code
+        == 429
+    )
+
+
 @pytest.mark.parametrize("operation", ["/logout", "/emergency-stop", "new-login"])
 def test_replay_cache_cannot_bypass_revocation(client, settings, operation):
     pair = login(client, settings)

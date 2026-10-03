@@ -205,9 +205,7 @@ def create_scheduled_transfer(
     except InvalidScheduleError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ScheduleQuotaExceededError as exc:
-        raise HTTPException(
-            status_code=429, detail="Active schedule limit reached"
-        ) from exc
+        raise HTTPException(status_code=429, detail="Schedule quota reached") from exc
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=503,

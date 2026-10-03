@@ -176,6 +176,74 @@ def test_older_refresh_reuse_revokes_after_multiple_rotations(client, settings):
         decode_user_id(third.access_token, settings, client.app.state.session_factory)
 
 
+def test_active_refresh_extends_inactivity_expiry_without_absolute_lifetime(
+    client, settings
+):
+    from datetime import datetime, timedelta, timezone
+    from app.db.models import AppSession, UsedAppRefreshToken
+    from app.services.token_store import rotate_app_refresh_token, _hash_refresh_token
+    from app.services.authorization import decode_user_id
+    from app.services.maintenance import prune_history
+
+    with client.app.state.session_factory() as session:
+        pair = save_monzo_tokens(
+            MonzoTokenResponse(
+                user_id="expiry-user", access_token="synthetic", expires_in=3600
+            ),
+            session,
+            settings,
+        )
+        row = session.query(AppSession).filter_by(user_id="expiry-user").one()
+        old = datetime.now(timezone.utc) - timedelta(days=3650)
+        row.created_at = old
+        row.updated_at = datetime.now(timezone.utc) - timedelta(days=59)
+        row.expires_at = row.updated_at + timedelta(days=60)
+        session.add_all(
+            [
+                UsedAppRefreshToken(
+                    token_hash=_hash_refresh_token(f"used-{i}"),
+                    session_id=row.session_id,
+                    used_at=old,
+                )
+                for i in range(4096)
+            ]
+        )
+        session.commit()
+    assert pair.refresh_expires_in == 60 * 86400
+    prune_history(client.app.state.session_factory)
+    response = client.post("/auth/refresh", json={"refreshToken": pair.refresh_token})
+    assert response.status_code == 200
+    assert response.json()["refreshExpiresIn"] == 60 * 86400
+    with client.app.state.session_factory() as session:
+        row = session.query(AppSession).filter_by(user_id="expiry-user").one()
+        assert row.expires_at == row.updated_at + timedelta(days=60)
+        assert row.expires_at > datetime.now(timezone.utc).replace(
+            tzinfo=None
+        ) + timedelta(days=59)
+        refreshed_deadline = row.expires_at
+    assert response.json()["expiresIn"] == settings.jwt_expiration_seconds
+    assert (
+        decode_user_id(
+            response.json()["token"], settings, client.app.state.session_factory
+        )
+        == "expiry-user"
+    )
+    duplicate = rotate_app_refresh_token(
+        pair.refresh_token, client.app.state.session_factory, settings
+    )
+    assert duplicate.refresh_token == response.json()["refreshToken"]
+    assert duplicate.access_token == response.json()["token"]
+    with client.app.state.session_factory() as session:
+        assert (
+            session.query(AppSession).filter_by(user_id="expiry-user").one().expires_at
+            == refreshed_deadline
+        )
+    assert (
+        client.post(
+            "/auth/refresh", json={"refreshToken": duplicate.refresh_token}
+        ).status_code
+        == 200
+    )
 
 
 def test_expired_refresh_session_cannot_refresh_or_use_access_token(client, settings):

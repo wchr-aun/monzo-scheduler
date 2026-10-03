@@ -13,6 +13,7 @@ from app.observability import configure_logging, get_logger
 from app.rate_limit import RequestRateLimiter
 from app.request_bounds import RequestBoundsMiddleware
 from app.routers import health, monzo, resources, tasks
+from app.services.maintenance import prune_history
 from app.services.scheduler import restore_scheduled_transfers
 
 logger = get_logger(__name__)
@@ -39,6 +40,15 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
         database_engine = engine or create_database_engine(settings.database_url)
         session_factory = create_session_factory(database_engine)
         scheduler = BackgroundScheduler(timezone="UTC")
+        prune_history(session_factory)
+        scheduler.add_job(
+            prune_history,
+            "interval",
+            hours=1,
+            args=[session_factory],
+            id="prune-history",
+            max_instances=1,
+        )
         restore_scheduled_transfers(scheduler, session_factory, settings)
         scheduler.start()
         application.state.scheduler = scheduler
