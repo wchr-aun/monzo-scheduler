@@ -68,6 +68,9 @@ def _save_credential(client, *, expired=False):
                         "created": "2017-11-09T12:30:53.695Z",
                         "updated": "2017-11-09T12:30:53.695Z",
                         "deleted": False,
+                        "available_for_bills": True,
+                        "cover_image_url": "https://public-images.monzo.com/pots/gallery_covers/tickets_v1.webp",
+                        "type": "default",
                     }
                 ]
             },
@@ -79,6 +82,8 @@ def _save_credential(client, *, expired=False):
                         "balance": 133700,
                         "currency": "GBP",
                         "deleted": False,
+                        "cover_image_url": "https://public-images.monzo.com/pots/gallery_covers/tickets_v1.webp",
+                        "type": "default",
                     }
                 ]
             },
@@ -111,6 +116,75 @@ def test_resource_routes_pass_through_monzo_responses(
         "Bearer test-access-token"
     )
     assert dict(upstream.calls.last.request.url.params) == expected_query
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {},
+        {"cover_image_url": None},
+        {"cover_image_url": "", "type": "savings"},
+    ],
+)
+def test_pots_preserves_optional_metadata(client, settings, metadata):
+    _save_credential(client)
+    pot = {
+        "id": "pot_123",
+        "name": "Savings",
+        "balance": 0,
+        "currency": "GBP",
+        "deleted": False,
+        "type": "default",
+    }
+    with respx.mock(assert_all_called=True) as monzo_mock:
+        monzo_mock.get("https://api.monzo.com/pots").mock(
+            return_value=httpx.Response(200, json={"pots": [{**pot, **metadata}]})
+        )
+        response = client.get(
+            "/pots?current_account_id=acc_123",
+            headers={"Authorization": f"Bearer {_session_token(settings)}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "pots": [
+            {
+                **pot,
+                "cover_image_url": metadata.get("cover_image_url"),
+                "type": metadata.get("type", "default"),
+            }
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {},
+        {"type": None},
+    ],
+)
+def test_pots_rejects_invalid_metadata(client, settings, metadata):
+    _save_credential(client)
+    pot = {
+        "id": "pot_123",
+        "name": "Savings",
+        "balance": 0,
+        "currency": "GBP",
+        "deleted": False,
+        **metadata,
+    }
+    with respx.mock(assert_all_called=True) as monzo_mock:
+        monzo_mock.get("https://api.monzo.com/pots").mock(
+            return_value=httpx.Response(200, json={"pots": [pot]})
+        )
+        response = client.get(
+            "/pots?current_account_id=acc_123",
+            headers={"Authorization": f"Bearer {_session_token(settings)}"},
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "Monzo returned an invalid response"}
 
 
 def test_accounts_with_balances_include_details_for_each_account(client, settings):

@@ -77,6 +77,8 @@ class Pot(BaseModel):
     balance: int = Field(strict=True)
     currency: str = Field(min_length=3, max_length=3)
     deleted: bool = Field(strict=True)
+    cover_image_url: str | None = None
+    type: str
 
 
 class PotsResponse(BaseModel):
