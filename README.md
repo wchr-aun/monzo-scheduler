@@ -99,8 +99,12 @@ Application refresh tokens expire after 60 days without a successful refresh.
 Each successful rotation starts another 60-day inactivity window. Ordinary API
 requests and duplicate refresh retries do not extend that deadline. There is no
 absolute lifetime from the original login and no rotation-count ceiling. Access
-JWTs expire according to `JWT_EXPIRATION_SECONDS`. Logout, emergency stop, a new
-login, and reuse outside the retry window can invalidate a session. Migration
+JWTs expire according to `JWT_EXPIRATION_SECONDS`. Users can stay logged in on
+multiple devices or browsers; a new login preserves existing sessions. Logout
+and refresh-token reuse outside the retry window invalidate only the affected
+session. Emergency stop and disconnect invalidate all sessions for the user.
+Legacy access JWTs without a session ID also invalidate all sessions on logout.
+Migration
 `0016` backfills inactivity deadlines from the last session update without
 restoring revoked sessions or consumed tokens.
 

@@ -102,14 +102,17 @@ def save_monzo_tokens(
         if credential is not None and credential.revocation_pending:
             raise MonzoDisconnectPendingError
         if credential is None:
-            credential = MonzoCredential(user_id=token_response.user_id)
+            credential = MonzoCredential(
+                user_id=token_response.user_id, session_version=1
+            )
             session.add(credential)
 
         credential.disconnected = False
         credential.access_token = encrypt_token(token_response.access_token, settings)
         credential.refresh_token = encrypt_token(token_response.refresh_token, settings)
         credential.token_type = token_response.token_type
-        credential.session_version = (credential.session_version or 0) + 1
+        # Keep existing sessions valid on login. The version is advanced only
+        # when an operation explicitly invalidates every session for this user.
         credential.expires_at = now + timedelta(seconds=token_response.expires_in)
         credential.updated_at = now
         # Models use scalar foreign keys rather than ORM relationships; persist
