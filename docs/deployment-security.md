@@ -28,9 +28,15 @@ remain available in production. OAuth and refresh do not require a BFF key.
 
 Review deploy/monzo-scheduler.service and deploy/nginx.conf as server templates.
 Use DATABASE_URL=sqlite:////var/lib/monzo-scheduler/monzo_scheduler.db so database
-writes fit the service sandbox. Keep /srv/monzo-scheduler/.env owner-readable
-only (0600) and /var/lib/monzo-scheduler private (0700). Both Alembic and the service
-must receive the same keys/environment. The service binds only to loopback,
+writes fit the service sandbox. Keep the service's EnvironmentFile owner-readable
+only (0600) and /var/lib/monzo-scheduler private (0700). Before deploying, install
+monzo-scheduler-migrate.service as a Type=oneshot unit using the same EnvironmentFile
+as the app service. Its ExecStartPre validates APP_ENV=production, and ExecStart
+runs uv run --no-sync alembic upgrade head from /srv/monzo-scheduler as the
+monzo-scheduler user. Use UV_CACHE_DIR=/var/lib/monzo-scheduler/.cache/uv and allow
+the deployment user to start this specific unit with sudo -n. Deployment stops
+the app, waits for the migration unit to succeed, then restarts the app. Failure
+leaves the app stopped. The service binds only to loopback,
 uses one worker, trusts forwarding headers only from the local proxy, and cannot
 write its source tree. The proxy replaces incoming forwarding headers and logs
 only method/path/status, omitting query strings and tokens. Review error logging
