@@ -48,11 +48,12 @@ MonzoOperation = Literal["accounts", "balance", "pots"]
 class MonzoSession:
     user_id: str
     access_token: str
+    session_token: str | None = None
 
 
 async def authenticated_user_id(
-        request: Request,
-        authorization: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    request: Request,
+    authorization: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> str:
     if authorization is None:
         logger.warning(
@@ -67,6 +68,7 @@ async def authenticated_user_id(
             request.app.state.settings,
             request.app.state.session_factory,
         )
+        request.state.session_token = authorization.credentials
         request.state.app_session_id = decode_app_session_id(
             authorization.credentials, request.app.state.settings
         )
@@ -86,8 +88,8 @@ async def authenticated_user_id(
 
 
 async def monzo_session(
-        request: Request,
-        user_id: str = Depends(authenticated_user_id),
+    request: Request,
+    user_id: str = Depends(authenticated_user_id),
 ) -> MonzoSession:
     try:
         access_token = await resolve_monzo_access_token(
@@ -95,7 +97,11 @@ async def monzo_session(
             request.app.state.session_factory,
             request.app.state.settings,
         )
-        return MonzoSession(user_id=user_id, access_token=access_token)
+        return MonzoSession(
+            user_id=user_id,
+            access_token=access_token,
+            session_token=request.state.session_token,
+        )
     except MonzoConnectionError:
         logger.warning(
             "authentication_failed path=%s reason=monzo_connection_unavailable",
@@ -124,11 +130,13 @@ async def monzo_session(
         )
         raise HTTPException(status_code=503, detail="Monzo API is unreachable") from exc
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=502, detail="Monzo token refresh failed") from exc
+        raise HTTPException(
+            status_code=502, detail="Monzo token refresh failed"
+        ) from exc
 
 
 async def monzo_access_token(
-        authentication: MonzoSession = Depends(monzo_session),
+    authentication: MonzoSession = Depends(monzo_session),
 ) -> str:
     return authentication.access_token
 
@@ -138,8 +146,8 @@ async def monzo_access_token(
     response_model=AccountsWithBalancesResponse,
 )
 async def accounts_with_balances(
-        account_type: str | None = None,
-        access_token: str = Depends(monzo_access_token),
+    account_type: str | None = None,
+    access_token: str = Depends(monzo_access_token),
 ) -> AccountsWithBalancesResponse | Response:
     accounts_response = await _validate_response(
         get_accounts(access_token, account_type),
@@ -155,7 +163,7 @@ async def accounts_with_balances(
     )
     accounts_with_balances: list[AccountWithBalance] = []
     for account, balance_response in zip(
-            accounts_response.accounts, balance_responses, strict=True
+        accounts_response.accounts, balance_responses, strict=True
     ):
         balance = _optional_balance(balance_response)
         accounts_with_balances.append(
@@ -189,8 +197,8 @@ def _optional_balance(response: BalanceResult) -> BalanceResponse | None:
 
 @router.get("/balance", response_model=BalanceResponse)
 async def balance(
-        account_id: str = Query(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9_-]+$"),
-        access_token: str = Depends(monzo_access_token),
+    account_id: str = Query(min_length=1, max_length=255, pattern=r"^[A-Za-z0-9_-]+$"),
+    access_token: str = Depends(monzo_access_token),
 ) -> BalanceResponse | Response:
     return await _validate_response(
         get_balance(access_token, account_id),
@@ -201,10 +209,10 @@ async def balance(
 
 @router.get("/pots", response_model=PotsResponse)
 async def pots(
-        current_account_id: str = Query(
-            min_length=1, max_length=255, pattern=r"^[A-Za-z0-9_-]+$"
-        ),
-        access_token: str = Depends(monzo_access_token),
+    current_account_id: str = Query(
+        min_length=1, max_length=255, pattern=r"^[A-Za-z0-9_-]+$"
+    ),
+    access_token: str = Depends(monzo_access_token),
 ) -> PotsResponse | Response:
     return await _validate_response(
         get_pots(access_token, current_account_id),
@@ -214,19 +222,19 @@ async def pots(
 
 
 async def _validate_response(
-        response_awaitable: Awaitable[httpx.Response],
-        schema: type[SchemaT],
-        *,
-        operation: MonzoOperation,
+    response_awaitable: Awaitable[httpx.Response],
+    schema: type[SchemaT],
+    *,
+    operation: MonzoOperation,
 ) -> SchemaT | Response:
     response = await _await_monzo_response(response_awaitable, operation=operation)
     return _validate_completed_response(response, schema, operation=operation)
 
 
 async def _await_monzo_response(
-        response_awaitable: Awaitable[ResponseValueT],
-        *,
-        operation: MonzoOperation,
+    response_awaitable: Awaitable[ResponseValueT],
+    *,
+    operation: MonzoOperation,
 ) -> ResponseValueT:
     try:
         return await response_awaitable
@@ -239,10 +247,10 @@ async def _await_monzo_response(
 
 
 def _validate_completed_response(
-        response: httpx.Response,
-        schema: type[SchemaT],
-        *,
-        operation: MonzoOperation,
+    response: httpx.Response,
+    schema: type[SchemaT],
+    *,
+    operation: MonzoOperation,
 ) -> SchemaT | Response:
     if response.is_error:
         error_code, error_message = monzo_error_details(response)
@@ -288,8 +296,7 @@ def _validate_completed_response(
         ) from exc
     except ValueError as exc:
         logger.error(
-            "monzo_request_failed operation=%s reason=invalid_json "
-            "exception_type=%s",
+            "monzo_request_failed operation=%s reason=invalid_json exception_type=%s",
             operation,
             type(exc).__name__,
         )
@@ -305,11 +312,11 @@ def _requires_monzo_approval(response: httpx.Response) -> bool:
         return False
     try:
         payload = response.json()
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return False
     return (
-            isinstance(payload, dict)
-            and payload.get("code") == "forbidden.insufficient_permissions"
+        isinstance(payload, dict)
+        and payload.get("code") == "forbidden.insufficient_permissions"
     )
 
 

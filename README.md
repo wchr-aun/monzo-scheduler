@@ -72,7 +72,7 @@ still contain plaintext tokens and should be retired securely; rotate Monzo
 credentials if those copies cannot be accounted for.
 
 OAuth state expires after ten minutes. The service limits requests to 120 per
-client address per minute and active schedules to 50 per user. These limits and
+client address per minute and active schedules to 50 per user. These request limits and
 the scheduler are process-local, so run one worker and configure the ASGI server
 to supply the real client address when the service is behind a trusted proxy.
 Emergency stop waits for any in-flight transfer, then cancels pending work and
@@ -85,3 +85,8 @@ the failing endpoint or Monzo operation. Every HTTP response includes an
 `X-Request-ID`; failed requests include the same identifier in their log entry
 for correlation. Query strings and authentication credentials are omitted so
 OAuth codes, JWTs, and Monzo tokens are not written to logs.
+
+Emergency stop persists a scheduling pause across logins. After authenticating
+again, explicitly call `POST /resume-transfers` before creating new schedules.
+Resuming does not reactivate cancelled schedules. Schedule creation revalidates
+the session while holding the same user lock as logout and emergency stop.

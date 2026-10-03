@@ -2,7 +2,6 @@
 
 import asyncio
 import calendar
-from threading import Lock
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal
@@ -27,12 +26,15 @@ from app.schemas.tasks import (
     TransferStatus,
     TransferType,
 )
-from app.services.authorization import resolve_monzo_access_token
+from app.services.authorization import (
+    resolve_monzo_access_token,
+    decode_user_id,
+    SessionAuthenticationError,
+)
+from app.services.user_locks import user_execution_lock
 from app.services.monzo import create_feed_item, deposit_into_pot, withdraw_from_pot
 
 logger = get_logger(__name__)
-_execution_locks: dict[str, Lock] = {}
-_execution_locks_guard = Lock()
 
 FEED_IMAGE_URL = (
     "https://raw.githubusercontent.com/wchr-aun/monzo-scheduler-ui/"
@@ -88,20 +90,22 @@ class ScheduledTransfersPage:
     offset: int
 
 
-def _user_execution_lock(user_id: str) -> Lock:
-    with _execution_locks_guard:
-        return _execution_locks.setdefault(user_id, Lock())
+_user_execution_lock = user_execution_lock
+
+
+class SchedulingPausedError(ValueError):
+    """Emergency stop must be explicitly cleared before creating schedules."""
 
 
 def list_scheduled_transfers(
-        session_factory: sessionmaker[Session],
-        user_id: str,
-        *,
-        statuses: tuple[TransferStatus, ...],
-        limit: int,
-        offset: int,
-        account_id: str | None = None,
-        pot_id: str | None = None,
+    session_factory: sessionmaker[Session],
+    user_id: str,
+    *,
+    statuses: tuple[TransferStatus, ...],
+    limit: int,
+    offset: int,
+    account_id: str | None = None,
+    pot_id: str | None = None,
 ) -> ScheduledTransfersPage:
     """Return a filtered page of the authenticated user's transfers."""
     with session_factory() as session:
@@ -166,13 +170,13 @@ def list_scheduled_transfers(
 
 
 def _schedule_transfer_unlocked(
-        scheduler: BackgroundScheduler,
-        session_factory: sessionmaker[Session],
-        settings: Settings,
-        user_id: str,
-        request: ScheduleTransferRequest,
-        *,
-        now: datetime | None = None,
+    scheduler: BackgroundScheduler,
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    user_id: str,
+    request: ScheduleTransferRequest,
+    *,
+    now: datetime | None = None,
 ) -> tuple[ScheduledTransferSetup, ScheduledTransfer, Job]:
     scheduled_at = request.datetime.astimezone(UK_TIMEZONE)
     current_time = (now or datetime.now(timezone.utc)).astimezone(UK_TIMEZONE)
@@ -181,7 +185,9 @@ def _schedule_transfer_unlocked(
 
     with session_factory() as session:
         active_count = session.scalar(
-            select(func.count()).select_from(ScheduledTransferSetup).where(
+            select(func.count())
+            .select_from(ScheduledTransferSetup)
+            .where(
                 ScheduledTransferSetup.user_id == user_id,
                 ScheduledTransferSetup.status == "active",
             )
@@ -212,7 +218,9 @@ def _schedule_transfer_unlocked(
 
     try:
         with session_factory() as session:
-            session.add_all([setup, transfer])
+            session.add(setup)
+            session.flush()
+            session.add(transfer)
             session.flush()
             job = _add_transfer_job(
                 scheduler,
@@ -238,10 +246,20 @@ def schedule_transfer(
     request: ScheduleTransferRequest,
     *,
     now: datetime | None = None,
+    session_token: str | None = None,
 ) -> tuple[ScheduledTransferSetup, ScheduledTransfer, Job]:
     lock = _user_execution_lock(user_id)
     lock.acquire()
     try:
+        if (
+            session_token is not None
+            and decode_user_id(session_token, settings, session_factory) != user_id
+        ):
+            raise SessionAuthenticationError
+        with session_factory() as session:
+            credential = session.get(MonzoCredential, user_id)
+            if credential is not None and credential.scheduling_paused:
+                raise SchedulingPausedError
         return _schedule_transfer_unlocked(
             scheduler, session_factory, settings, user_id, request, now=now
         )
@@ -250,10 +268,10 @@ def schedule_transfer(
 
 
 def cancel_scheduled_transfer(
-        scheduler: BackgroundScheduler,
-        session_factory: sessionmaker[Session],
-        user_id: str,
-        setup_id: str,
+    scheduler: BackgroundScheduler,
+    session_factory: sessionmaker[Session],
+    user_id: str,
+    setup_id: str,
 ) -> ScheduledTransferSetup:
     lock = _user_execution_lock(user_id)
     lock.acquire()
@@ -296,11 +314,19 @@ def emergency_stop_user_transfers(
     scheduler: BackgroundScheduler,
     session_factory: sessionmaker[Session],
     user_id: str,
+    *,
+    session_token: str | None = None,
+    settings: Settings | None = None,
 ) -> int:
     """Deactivate a user's schedules and cancel all occurrences that have not started."""
     lock = _user_execution_lock(user_id)
     lock.acquire()
     try:
+        if (
+            session_token is not None
+            and decode_user_id(session_token, settings, session_factory) != user_id
+        ):
+            raise SessionAuthenticationError
         return _emergency_stop_user_transfers_locked(
             scheduler, session_factory, user_id
         )
@@ -337,6 +363,7 @@ def _emergency_stop_user_transfers_locked(
         credential = session.get(MonzoCredential, user_id)
         if credential is not None:
             credential.session_version = (credential.session_version or 0) + 1
+            credential.scheduling_paused = True
         session.commit()
 
     for transfer_id in transfer_ids:
@@ -345,9 +372,9 @@ def _emergency_stop_user_transfers_locked(
 
 
 def restore_scheduled_transfers(
-        scheduler: BackgroundScheduler,
-        session_factory: sessionmaker[Session],
-        settings: Settings,
+    scheduler: BackgroundScheduler,
+    session_factory: sessionmaker[Session],
+    settings: Settings,
 ) -> int:
     """Restore pending occurrences, cancelling any from inactive setups."""
     with session_factory() as session:
@@ -387,10 +414,10 @@ def restore_scheduled_transfers(
 
 
 def execute_scheduled_transfer(
-        transfer_id: str,
-        scheduler: BackgroundScheduler,
-        session_factory: sessionmaker[Session],
-        settings: Settings,
+    transfer_id: str,
+    scheduler: BackgroundScheduler,
+    session_factory: sessionmaker[Session],
+    settings: Settings,
 ) -> None:
     """Execute one occurrence and create its setup's next occurrence."""
     user_id = _transfer_user_id(transfer_id, session_factory)
@@ -434,10 +461,10 @@ def _transfer_user_id(
 
 
 async def _execute_scheduled_transfer(
-        transfer_id: str,
-        scheduler: BackgroundScheduler,
-        session_factory: sessionmaker[Session],
-        settings: Settings,
+    transfer_id: str,
+    scheduler: BackgroundScheduler,
+    session_factory: sessionmaker[Session],
+    settings: Settings,
 ) -> None:
     values = _load_pending_execution(transfer_id, session_factory)
     if values is None:
@@ -511,12 +538,12 @@ async def _execute_scheduled_transfer(
 
 
 async def _notify_transfer_result(
-        access_token: str,
-        values: TransferExecution,
-        transfer_id: str,
-        *,
-        succeeded: bool,
-        pot_name: str | None = None,
+    access_token: str,
+    values: TransferExecution,
+    transfer_id: str,
+    *,
+    succeeded: bool,
+    pot_name: str | None = None,
 ) -> None:
     is_deposit = values.transfer_type == TransferType.DEPOSIT.value
     action = "deposit" if is_deposit else "withdrawal"
@@ -579,8 +606,8 @@ def _pot_name(response: httpx.Response) -> str | None:
 
 
 def _load_pending_execution(
-        transfer_id: str,
-        session_factory: sessionmaker[Session],
+    transfer_id: str,
+    session_factory: sessionmaker[Session],
 ) -> TransferExecution | None:
     try:
         with session_factory() as session:
@@ -590,7 +617,7 @@ def _load_pending_execution(
                     ScheduledTransfer.transfer_id == transfer_id,
                     ScheduledTransfer.status == "pending",
                 )
-                .values(status="running")
+                .values(status="running", executed_at=datetime.now(timezone.utc))
             )
             if claimed.rowcount != 1:
                 session.rollback()
@@ -626,11 +653,11 @@ def _load_pending_execution(
 
 
 def _finalize_occurrence(
-        transfer_id: str,
-        status: Literal["completed", "failed"],
-        scheduler: BackgroundScheduler,
-        session_factory: sessionmaker[Session],
-        settings: Settings,
+    transfer_id: str,
+    status: Literal["completed", "failed"],
+    scheduler: BackgroundScheduler,
+    session_factory: sessionmaker[Session],
+    settings: Settings,
 ) -> None:
     next_transfer: ScheduledTransfer | None = None
     next_job: Job | None = None
@@ -647,13 +674,9 @@ def _finalize_occurrence(
             transfer.status = status
             transfer.executed_at = executed_at
             if setup.status == "active":
-                next_scheduled_for = _next_occurrence(
-                    setup, transfer.scheduled_for
-                )
+                next_scheduled_for = _next_occurrence(setup, transfer.scheduled_for)
                 while next_scheduled_for <= executed_at:
-                    next_scheduled_for = _next_occurrence(
-                        setup, next_scheduled_for
-                    )
+                    next_scheduled_for = _next_occurrence(setup, next_scheduled_for)
                 next_transfer = ScheduledTransfer(
                     setup_id=setup.setup_id,
                     scheduled_for=next_scheduled_for,
@@ -676,7 +699,7 @@ def _finalize_occurrence(
 
 
 def _next_occurrence(
-        setup: ScheduledTransferSetup, previous_scheduled_for: datetime
+    setup: ScheduledTransferSetup, previous_scheduled_for: datetime
 ) -> datetime:
     previous = _as_utc(previous_scheduled_for).astimezone(UK_TIMEZONE)
     if setup.interval == TransferInterval.DAILY.value:
@@ -703,13 +726,13 @@ def _next_month(previous: date, requested_day: int) -> date:
 
 
 def _add_transfer_job(
-        scheduler: BackgroundScheduler,
-        transfer: ScheduledTransfer,
-        session_factory: sessionmaker[Session],
-        settings: Settings,
-        *,
-        replace_existing: bool,
-        run_at: datetime | None = None,
+    scheduler: BackgroundScheduler,
+    transfer: ScheduledTransfer,
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    *,
+    replace_existing: bool,
+    run_at: datetime | None = None,
 ) -> Job:
     return scheduler.add_job(
         execute_scheduled_transfer,
@@ -722,9 +745,7 @@ def _add_transfer_job(
     )
 
 
-def _remove_job_if_present(
-        scheduler: BackgroundScheduler, transfer_id: str
-) -> None:
+def _remove_job_if_present(scheduler: BackgroundScheduler, transfer_id: str) -> None:
     try:
         scheduler.remove_job(transfer_id)
     except JobLookupError:
@@ -735,3 +756,15 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def resume_user_scheduling(user_id, session_token, session_factory, settings):
+    with user_execution_lock(user_id):
+        if decode_user_id(session_token, settings, session_factory) != user_id:
+            raise SessionAuthenticationError
+        with session_factory() as session:
+            credential = session.get(MonzoCredential, user_id)
+            if credential is None:
+                raise SessionAuthenticationError
+            credential.scheduling_paused = False
+            session.commit()
