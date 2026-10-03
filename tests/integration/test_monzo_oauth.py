@@ -22,7 +22,7 @@ def test_oauth_state_is_bound_to_the_browser_cookie(client):
     other_browser.close()
 
     assert callback.status_code == 400
-    assert state in client.app.state.oauth_states
+    assert client.cookies.get("monzo_oauth_state") == state
 
 
 def test_oauth_redirect_and_token_exchange_happy_path(client, settings):
@@ -50,7 +50,7 @@ def test_oauth_redirect_and_token_exchange_happy_path(client, settings):
         assert redirect_params["redirect_uri"] == [settings.monzo_redirect_uri]
         assert redirect_params["response_type"] == ["code"]
         state = redirect_params["state"][0]
-        assert state in client.app.state.oauth_states
+        assert client.cookies.get("monzo_oauth_state") == state
         cookie = redirect.headers["set-cookie"]
         assert "HttpOnly" in cookie
         assert "SameSite=lax" in cookie
@@ -67,7 +67,6 @@ def test_oauth_redirect_and_token_exchange_happy_path(client, settings):
     assert callback.headers["pragma"] == "no-cache"
     assert callback.headers["referrer-policy"] == "no-referrer"
     assert 'monzo_oauth_state="";' in callback.headers["set-cookie"]
-    assert state not in client.app.state.oauth_states
     jwt_claims = jwt.decode(
         response_body["token"], settings.jwt_secret_key, algorithms=["HS256"]
     )
@@ -91,7 +90,7 @@ def test_oauth_redirect_and_token_exchange_happy_path(client, settings):
     }
 
 
-def test_concurrent_app_refresh_requests_share_the_rotated_token(client, settings):
+def test_concurrent_app_refresh_requests_share_one_rotation(client, settings):
     with client.app.state.session_factory() as session:
         token_pair = save_monzo_tokens(
             MonzoTokenResponse(
@@ -110,9 +109,99 @@ def test_concurrent_app_refresh_requests_share_the_rotated_token(client, setting
             json={"refresh_token": token_pair.refresh_token},
         )
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        responses = list(executor.map(lambda _: refresh(), range(2)))
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        responses = list(executor.map(lambda _: refresh(), range(8)))
 
-    assert [response.status_code for response in responses] == [200, 200]
-    assert responses[0].json()["refreshToken"] == responses[1].json()["refreshToken"]
-    assert responses[0].json()["refreshToken"] != token_pair.refresh_token
+    assert all(response.status_code == 200 for response in responses)
+    successful = responses[0].json()
+    assert all(response.json() == successful for response in responses)
+    from app.db.models import AppSession, UsedAppRefreshToken
+
+    with client.app.state.session_factory() as session:
+        assert session.query(UsedAppRefreshToken).count() == 1
+        assert session.query(AppSession).one().revoked_at is None
+    assert (
+        client.post(
+            "/auth/refresh", json={"refreshToken": successful["refreshToken"]}
+        ).status_code
+        == 200
+    )
+
+
+def test_older_refresh_reuse_revokes_after_multiple_rotations(client, settings):
+    from app.services.token_store import rotate_app_refresh_token
+    from app.services.authorization import decode_user_id, SessionAuthenticationError
+    import pytest
+
+    with client.app.state.session_factory() as session:
+        original = save_monzo_tokens(
+            MonzoTokenResponse(
+                user_id="user_reuse", access_token="synthetic", expires_in=3600
+            ),
+            session,
+            settings,
+        )
+    second = rotate_app_refresh_token(
+        original.refresh_token, client.app.state.session_factory, settings
+    )
+    third = rotate_app_refresh_token(
+        second.refresh_token, client.app.state.session_factory, settings
+    )
+    assert (
+        rotate_app_refresh_token("x" * 64, client.app.state.session_factory, settings)
+        is None
+    )
+    assert (
+        decode_user_id(third.access_token, settings, client.app.state.session_factory)
+        == "user_reuse"
+    )
+    assert (
+        rotate_app_refresh_token(
+            original.refresh_token, client.app.state.session_factory, settings
+        )
+        is None
+    )
+    assert (
+        rotate_app_refresh_token(
+            third.refresh_token, client.app.state.session_factory, settings
+        )
+        is None
+    )
+    with pytest.raises(SessionAuthenticationError):
+        decode_user_id(third.access_token, settings, client.app.state.session_factory)
+
+
+
+
+def test_expired_refresh_session_cannot_refresh_or_use_access_token(client, settings):
+    from datetime import datetime, timedelta, timezone
+    from app.db.models import AppSession
+    from tests.integration.test_security_races import login
+
+    pair = login(client, settings)
+    rotated = client.post(
+        "/auth/refresh", json={"refreshToken": pair.refresh_token}
+    ).json()
+    with client.app.state.session_factory() as session:
+        row = session.query(AppSession).one()
+        row.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        session.commit()
+    # Even a cached retry result must not bypass session expiry.
+    assert (
+        client.post(
+            "/auth/refresh", json={"refreshToken": pair.refresh_token}
+        ).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            "/auth/refresh", json={"refreshToken": rotated["refreshToken"]}
+        ).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            "/logout", headers={"Authorization": f"Bearer {rotated['token']}"}
+        ).status_code
+        == 401
+    )

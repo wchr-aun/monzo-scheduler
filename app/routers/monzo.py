@@ -14,7 +14,6 @@ from app.observability import monzo_error_details
 from app.schemas.monzo import AppRefreshRequest, MonzoTokenResponse
 from app.services.monzo import exchange_authorization_code
 from app.services.token_store import (
-    APP_REFRESH_TOKEN_TTL,
     AppTokenPair,
     rotate_app_refresh_token,
     save_monzo_tokens,
@@ -31,7 +30,7 @@ def _token_pair_response(token_pair: AppTokenPair, settings: Settings) -> dict[s
         "token": token_pair.access_token,
         "expiresIn": settings.jwt_expiration_seconds,
         "refreshToken": token_pair.refresh_token,
-        "refreshExpiresIn": int(APP_REFRESH_TOKEN_TTL.total_seconds()),
+        "refreshExpiresIn": token_pair.refresh_expires_in,
     }
 
 

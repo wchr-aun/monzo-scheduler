@@ -17,16 +17,20 @@ After completing the Monzo OAuth flow, send the returned application token as
 - `POST /emergency-stop` to revoke sessions, deactivate schedules, and cancel pending transfers
 - `POST /auth/refresh` to rotate an application refresh token
 
-The OAuth callback also returns a `refreshToken`. The frontend BFF should keep
-it in its server-side session or a `Secure`, `HttpOnly` cookie and must not
-expose it to browser JavaScript. When the 10-minute application JWT expires,
-the BFF can call `POST /auth/refresh` with `{"refreshToken":"..."}`. The
-response contains a new `token`, a rotated `refreshToken`, `expiresIn`, and
-`refreshExpiresIn`. Each successful refresh resets the 60-day inactivity
-window. A refresh token can be used only once; BFF refresh requests should be
-serialized where possible. If duplicate requests arrive together, the backend
-accepts retries of the previous token for 30 seconds and returns the same
-rotated refresh token, so the BFF does not lose its session to a race.
+The OAuth callback also returns a `refreshToken`. When the application JWT
+expires (15 minutes by default), the client can call `POST /auth/refresh` with
+`{"refreshToken":"..."}`. The response contains a new `token`, a rotated
+`refreshToken`, `expiresIn`, and `refreshExpiresIn` (5,184,000 seconds: 60 days
+from each successful rotation). Each rotation has a fixed five-second retry window:
+concurrent requests using the immediately previous token receive the same token
+pair without another rotation. Retries never extend the window. Reuse after the
+window or of an older predecessor revokes the session, including its latest JWT.
+Serialize frontend refreshes and atomically save replacements to avoid stale
+responses overwriting newer tokens. Refresh tokens are stored only as hashes in
+SQLite. The bounded retry cache holds token pairs in memory, is scoped to the
+application's database/session factory, and is lost on application restart. A
+retry after restart or outside the window requires a fresh login. Unknown tokens
+receive 401 without revoking unrelated sessions.
 
 Schedule requests use a timezone-aware UK local datetime, a positive amount in
 minor currency units, and one of the `daily`, `weekly`, or `monthly` intervals:
@@ -90,3 +94,18 @@ Emergency stop persists a scheduling pause across logins. After authenticating
 again, explicitly call `POST /resume-transfers` before creating new schedules.
 Resuming does not reactivate cancelled schedules. Schedule creation revalidates
 the session while holding the same user lock as logout and emergency stop.
+
+Application refresh tokens expire after 60 days without a successful refresh.
+Each successful rotation starts another 60-day inactivity window. Ordinary API
+requests and duplicate refresh retries do not extend that deadline. There is no
+absolute lifetime from the original login and no rotation-count ceiling. Access
+JWTs expire according to `JWT_EXPIRATION_SECONDS`. Logout, emergency stop, a new
+login, and reuse outside the retry window can invalidate a session. Migration
+`0016` backfills inactivity deadlines from the last session update without
+restoring revoked sessions or consumed tokens.
+
+OAuth and refresh retain the direct-client flow without a BFF shared-secret
+requirement. Serialize refresh requests per session and persist replacement tokens
+atomically. A lost refresh response can be retried within the five-second window
+while that rotation is still the latest and the process has not restarted. Clear the frontend session on authentication failure, logout, or
+emergency stop. A refresh quota 429 is temporary; retain the current token.

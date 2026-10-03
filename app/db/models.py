@@ -58,15 +58,6 @@ class AppSession(Base):
     refresh_token_hash: Mapped[str] = mapped_column(
         String(64), unique=True, nullable=False
     )
-    refresh_token_ciphertext: Mapped[str | None] = mapped_column(
-        String(255), nullable=True
-    )
-    previous_refresh_token_hash: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )
-    previous_refresh_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -83,6 +74,18 @@ class AppSession(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+
+class UsedAppRefreshToken(Base):
+    __tablename__ = "used_app_refresh_tokens"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("app_sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ScheduledTransferSetup(Base):
