@@ -1,6 +1,9 @@
 from contextlib import asynccontextmanager
 from time import monotonic
 from uuid import uuid6
+from urllib.parse import urlparse
+import base64
+from app.transport_security import TransportSecurityMiddleware
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request
@@ -39,6 +42,30 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
             raise RuntimeError("JWT_SECRET_KEY must contain at least 32 bytes")
         if not 1 <= settings.jwt_expiration_seconds <= 3600:
             raise RuntimeError("JWT_EXPIRATION_SECONDS must be between 1 and 3600")
+        if settings.environment not in {"development", "production"}:
+            raise RuntimeError("APP_ENV must be development or production")
+        if settings.environment == "production":
+            if urlparse(settings.monzo_redirect_uri).scheme != "https":
+                raise RuntimeError("MONZO_REDIRECT_URI must use HTTPS in production")
+            if settings.jwt_secret_key.startswith(("replace-", "your-", "test-")):
+                raise RuntimeError(
+                    "Production secrets must not be placeholders or test credentials"
+                )
+            if (
+                len(
+                    {
+                        settings.jwt_secret_key,
+                        settings.token_encryption_key,
+                    }
+                )
+                != 2
+            ):
+                raise RuntimeError("Signing and encryption keys must be distinct")
+            if base64.urlsafe_b64decode(settings.token_encryption_key) in {
+                b"0" * 32,
+                b"\0" * 32,
+            }:
+                raise RuntimeError("Production encryption key must not be a test key")
         database_engine = engine or create_database_engine(settings.database_url)
         session_factory = create_session_factory(database_engine)
         scheduler = BackgroundScheduler(timezone="UTC")
@@ -149,6 +176,10 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
         return response
 
     application.add_middleware(RequestBoundsMiddleware)
+    application.add_middleware(
+        TransportSecurityMiddleware, production=settings.environment == "production"
+    )
+
     application.include_router(health.router)
     application.include_router(tasks.router)
     application.include_router(monzo.router)

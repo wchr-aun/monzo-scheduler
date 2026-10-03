@@ -150,3 +150,7 @@ emergency stop. A refresh quota 429 is temporary; retain the current token.
 Transfer amounts must be positive signed 64-bit integers. Schedule creation and
 explicit resume require a valid application session, without a recent-login
 requirement or application-level monetary caps.
+
+Production additionally requires an HTTPS redirect URI;
+it rejects HTTP requests and keeps API docs/schema available. Review the provided
+[deployment templates and rollout requirements](docs/deployment-security.md).

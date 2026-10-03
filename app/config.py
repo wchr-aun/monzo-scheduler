@@ -18,11 +18,13 @@ class Settings:
     jwt_secret_key: str = field(default="", repr=False)
     token_encryption_key: str = field(default="", repr=False)
     jwt_expiration_seconds: int = 900
+    environment: str = "development"
 
     @classmethod
     def from_environment(cls) -> "Settings":
         load_dotenv(dotenv_path=ENV_FILE, override=False)
         return cls(
+            environment=os.getenv("APP_ENV", "development"),
             monzo_client_id=os.getenv("MONZO_CLIENT_ID", ""),
             monzo_client_secret=os.getenv("MONZO_CLIENT_SECRET", ""),
             monzo_redirect_uri=os.getenv(
