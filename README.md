@@ -134,6 +134,13 @@ blocked while revocation remains pending. After confirmed disconnection, reconne
 through OAuth and explicitly resume scheduling. Ordinary logout keeps scheduled
 transfers and the Monzo connection intact.
 
+All application responses, including authentication errors and private financial
+data, send `Cache-Control: no-store` and `Pragma: no-cache`. Validation errors omit
+submitted values, context, and untrusted field names. Token models hide secrets
+from representations and upstream validation tracebacks. Configure external
+monitoring and proxy logs to exclude authentication bodies, cookies, Authorization
+headers, and OAuth callback query strings too.
+
 OAuth and refresh retain the direct-client flow without a BFF shared-secret
 requirement. Serialize refresh requests per session and persist replacement tokens
 atomically. A lost refresh response can be retried within the five-second window

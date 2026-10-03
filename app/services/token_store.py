@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import secrets
@@ -34,8 +34,8 @@ _REFRESH_LOCKS = tuple(Lock() for _ in range(32))
 
 @dataclass(frozen=True)
 class AppTokenPair:
-    access_token: str
-    refresh_token: str
+    access_token: str = field(repr=False)
+    refresh_token: str = field(repr=False)
     expires_in: int
     refresh_expires_in: int
 

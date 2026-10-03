@@ -4,6 +4,7 @@ from uuid import uuid6
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from cryptography.fernet import Fernet
 from fastapi.responses import JSONResponse
 
@@ -80,6 +81,30 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
         lifespan=lifespan,
     )
 
+    @application.exception_handler(RequestValidationError)
+    async def sanitized_validation_error(request, exc):
+        # Never return submitted input, exception context, or attacker-controlled
+        # field names. Preserve only the validation category and input source.
+        detail = [
+            {
+                "loc": [error["loc"][0]] if error.get("loc") else [],
+                "type": error["type"],
+                "msg": "Invalid request data",
+            }
+            for error in exc.errors()
+        ]
+        return JSONResponse(
+            {"detail": detail},
+            status_code=422,
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
+
+    @application.exception_handler(Exception)
+    async def sanitized_server_error(request, exc):
+        response = JSONResponse({"detail": "Internal server error"}, status_code=500)
+        _add_security_headers(response, request)
+        return response
+
     @application.middleware("http")
     async def log_request_failures(request: Request, call_next):
         request_id = uuid6().hex
@@ -132,6 +157,8 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
 
 
 def _add_security_headers(response, request: Request) -> None:
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")

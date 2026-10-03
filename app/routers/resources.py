@@ -1,7 +1,7 @@
 """Authenticated pass-through routes for Monzo account resources."""
 
 from collections.abc import Awaitable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Never, TypeVar
 
 import httpx
@@ -47,8 +47,8 @@ MonzoOperation = Literal["accounts", "balance", "pots"]
 @dataclass(frozen=True)
 class MonzoSession:
     user_id: str
-    access_token: str
-    session_token: str | None = None
+    access_token: str = field(repr=False)
+    session_token: str | None = field(default=None, repr=False)
 
 
 async def authenticated_user_id(
