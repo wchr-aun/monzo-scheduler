@@ -4,14 +4,26 @@ from pydantic import BaseModel, ConfigDict, Field
 class MonzoTokenResponse(BaseModel):
     """Token payload returned by Monzo's OAuth authorization-code exchange."""
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
 
-    access_token: str = Field(min_length=1)
+    access_token: str = Field(min_length=1, repr=False)
     client_id: str | None = None
     expires_in: int = Field(strict=True, gt=0)
-    refresh_token: str | None = None
+    refresh_token: str | None = Field(default=None, repr=False)
     token_type: str = Field(default="Bearer", min_length=1)
     user_id: str = Field(min_length=1)
+
+
+class AppRefreshRequest(BaseModel):
+    """Refresh credential submitted by an application client."""
+
+    model_config = ConfigDict(
+        populate_by_name=True, extra="forbid", hide_input_in_errors=True
+    )
+
+    refresh_token: str = Field(
+        min_length=32, max_length=256, alias="refreshToken", repr=False
+    )
 
 
 class Account(BaseModel):

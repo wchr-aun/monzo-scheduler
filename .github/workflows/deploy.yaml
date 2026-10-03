@@ -1,26 +1,66 @@
 name: Deploy to DigitalOcean
-
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
-
+permissions:
+  contents: read
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
 jobs:
-  deploy:
-    name: Deploy to DigitalOcean
+  verify:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy to DigitalOcean Droplet
-        uses: appleboy/ssh-action@v1
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          host: ${{ secrets.HOST }}
-          username: ${{ secrets.USER }}
-          key: ${{ secrets.KEY }}
-          script: |
-            set -e
-            sudo -n -u monzo-scheduler -H git -C /srv/monzo-scheduler pull --ff-only origin main
-            sudo -n -u monzo-scheduler -H /var/lib/monzo-scheduler/.local/bin/uv --directory /srv/monzo-scheduler sync --frozen --no-dev
-            sudo -n -u monzo-scheduler -H /var/lib/monzo-scheduler/.local/bin/uv --directory /srv/monzo-scheduler run --no-sync alembic upgrade head
-            sudo -n systemctl restart monzo-scheduler
-            sudo -n systemctl is-active --quiet monzo-scheduler
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c7f87aa956e4c323abf06d5dec078e358f6b4d04 # v6.0.0
+        with:
+          version: '0.12.19'
+          python-version: '3.14'
+      - run: python scripts/check_sensitive_files.py
+      - run: uv sync --frozen
+      - run: uv run --no-sync pytest
+  deploy:
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy verified revision with pinned SSH host identity
+        env:
+          DEPLOY_HOST: ${{ secrets.HOST }}
+          DEPLOY_USER: ${{ secrets.USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9._:-]+$ ]]
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          umask 077
+          deploy_tmp="$(mktemp -d)"
+          trap 'rm -rf "$deploy_tmp"' EXIT
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$deploy_tmp/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$deploy_tmp/known_hosts"
+          unset DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS
+          ssh -i "$deploy_tmp/key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$deploy_tmp/known_hosts" \
+            "$DEPLOY_USER@$DEPLOY_HOST" "bash -se -- '$GITHUB_SHA'" <<'DEPLOY'
+          set -euo pipefail
+          expected_commit="$1"
+          sudo -n -u monzo-scheduler -H git -C /srv/monzo-scheduler fetch origin main
+          sudo -n -u monzo-scheduler -H git -C /srv/monzo-scheduler merge-base --is-ancestor "$expected_commit" origin/main
+          sudo -n -u monzo-scheduler -H git -C /srv/monzo-scheduler merge --ff-only "$expected_commit"
+          test "$(sudo -n -u monzo-scheduler -H git -C /srv/monzo-scheduler rev-parse HEAD)" = "$expected_commit"
+          sudo -n -u monzo-scheduler -H /var/lib/monzo-scheduler/.local/bin/uv --directory /srv/monzo-scheduler sync --frozen --no-dev
+          sudo -n -u monzo-scheduler -H /var/lib/monzo-scheduler/.local/bin/uv --directory /srv/monzo-scheduler run --no-sync python -c 'from dotenv import load_dotenv; import os; load_dotenv(); assert os.getenv("APP_ENV") == "production", "APP_ENV=production is required for deployment"'
+          sudo -n systemctl stop monzo-scheduler
+          sudo -n -u monzo-scheduler -H /var/lib/monzo-scheduler/.local/bin/uv --directory /srv/monzo-scheduler run --no-sync alembic upgrade head
+          sudo -n systemctl restart monzo-scheduler
+          sudo -n systemctl is-active --quiet monzo-scheduler
+          DEPLOY

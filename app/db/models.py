@@ -1,14 +1,16 @@
 from datetime import date, datetime, timezone
-from uuid import uuid6
+from uuid import uuid4, uuid6
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
     SmallInteger,
     String,
+    Index,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -21,10 +23,21 @@ class MonzoCredential(Base):
     __tablename__ = "monzo_credentials"
 
     user_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    access_token: Mapped[str] = mapped_column("access_token_ciphertext", String, nullable=False)
-    refresh_token: Mapped[str | None] = mapped_column("refresh_token_ciphertext", String, nullable=True)
+    access_token: Mapped[str] = mapped_column(
+        "access_token_ciphertext", String, nullable=False
+    )
+    refresh_token: Mapped[str | None] = mapped_column(
+        "refresh_token_ciphertext", String, nullable=True
+    )
     token_type: Mapped[str] = mapped_column(String(32), nullable=False)
     session_version: Mapped[int] = mapped_column(default=0, nullable=False)
+    disconnected: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    revocation_pending: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    scheduling_paused: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -32,6 +45,61 @@ class MonzoCredential(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
+    )
+
+
+class AppSession(Base):
+    __tablename__ = "app_sessions"
+
+    session_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("monzo_credentials.user_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    session_version: Mapped[int] = mapped_column(nullable=False)
+    refresh_token_hash: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
+class UsedAppRefreshToken(Base):
+    __tablename__ = "used_app_refresh_tokens"
+    __table_args__ = (Index("ix_used_refresh_session_time", "session_id", "used_at"),)
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        ForeignKey("app_sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ConsumedOAuthState(Base):
+    __tablename__ = "consumed_oauth_states"
+
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
     )
 
 
@@ -56,9 +124,7 @@ class ScheduledTransferSetup(Base):
         CheckConstraint(
             "minute BETWEEN 0 AND 59", name="ck_scheduled_transfer_setups_minute"
         ),
-        CheckConstraint(
-            "amount > 0", name="ck_scheduled_transfer_setups_amount"
-        ),
+        CheckConstraint("amount > 0", name="ck_scheduled_transfer_setups_amount"),
     )
 
     setup_id: Mapped[str] = mapped_column(

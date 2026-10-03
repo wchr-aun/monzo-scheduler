@@ -20,7 +20,9 @@ def _validate_resource_id(value: str) -> None:
         raise ValueError("Invalid Monzo resource identifier")
 
 
-async def exchange_authorization_code(code: str, settings: Settings) -> MonzoTokenResponse:
+async def exchange_authorization_code(
+    code: str, settings: Settings
+) -> MonzoTokenResponse:
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(
             f"{MONZO_API_URL}/oauth2/token",
@@ -75,9 +77,7 @@ async def get_balances(
     return list(results)
 
 
-async def _get_balance_result(
-    access_token: str, account_id: str
-) -> BalanceResult:
+async def _get_balance_result(access_token: str, account_id: str) -> BalanceResult:
     try:
         return await get_balance(access_token, account_id)
     except httpx.RequestError as exc:
@@ -180,12 +180,15 @@ async def _post(
         )
 
 
-async def _put(
-    path: str, access_token: str, *, data: dict[str, str]
-) -> httpx.Response:
+async def _put(path: str, access_token: str, *, data: dict[str, str]) -> httpx.Response:
     async with httpx.AsyncClient(timeout=15.0) as client:
         return await client.put(
             f"{MONZO_API_URL}{path}",
             data=data,
             headers={"Authorization": f"Bearer {access_token}"},
         )
+
+
+async def revoke_access(access_token: str) -> None:
+    response = await _post("/oauth2/logout", access_token, data={})
+    response.raise_for_status()

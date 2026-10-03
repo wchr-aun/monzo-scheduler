@@ -1,4 +1,5 @@
 from typing import Annotated
+from datetime import datetime, timezone
 
 from fastapi import (
     APIRouter,
@@ -12,7 +13,7 @@ from fastapi import (
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.routers.resources import MonzoSession, authenticated_user_id, monzo_session
-from app.db.models import MonzoCredential
+from app.db.models import AppSession, MonzoCredential
 from app.schemas.tasks import (
     UK_TIMEZONE,
     ScheduleTransferRequest,
@@ -22,6 +23,8 @@ from app.schemas.tasks import (
 )
 from app.services.scheduler import (
     InvalidScheduleError,
+    SchedulingPausedError,
+    resume_user_scheduling,
     ScheduleNotFoundError,
     ScheduleQuotaExceededError,
     cancel_scheduled_transfer,
@@ -29,6 +32,14 @@ from app.services.scheduler import (
     list_scheduled_transfers,
     schedule_transfer,
 )
+
+from app.services.authorization import (
+    SessionAuthenticationError,
+    decode_user_id,
+)
+from app.services.disconnection import retry_monzo_disconnection
+from fastapi.responses import JSONResponse
+from app.services.user_locks import user_execution_lock
 
 router = APIRouter(tags=["tasks"])
 
@@ -46,16 +57,37 @@ def logout(
     user_id: str = Depends(authenticated_user_id),
 ) -> Response:
     try:
-        with request.app.state.session_factory() as session:
-            credential = session.get(MonzoCredential, user_id)
-            if credential is not None:
-                credential.session_version += 1
-                session.commit()
+        with (
+            user_execution_lock(user_id),
+            request.app.state.session_factory() as session,
+        ):
+            decode_user_id(
+                request.state.session_token,
+                request.app.state.settings,
+                request.app.state.session_factory,
+            )
+            app_session_id = getattr(request.state, "app_session_id", None)
+            if app_session_id is not None:
+                app_session = session.get(AppSession, app_session_id)
+                if app_session is not None and app_session.user_id == user_id:
+                    app_session.revoked_at = datetime.now(timezone.utc)
+                    session.commit()
+            else:
+                # Legacy access JWTs have no per-session identifier.
+                credential = session.get(MonzoCredential, user_id)
+                if credential is not None:
+                    credential.session_version += 1
+                    session.commit()
+    except SessionAuthenticationError:
+        raise HTTPException(status_code=401, detail="Session revoked") from None
     except SQLAlchemyError as exc:
-        raise HTTPException(status_code=503, detail="Session storage is unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="Session storage is unavailable"
+        ) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.post("/disconnect", status_code=status.HTTP_204_NO_CONTENT)
 @router.post("/emergency-stop", status_code=status.HTTP_204_NO_CONTENT)
 def emergency_stop(
     request: Request,
@@ -66,11 +98,23 @@ def emergency_stop(
             request.app.state.scheduler,
             request.app.state.session_factory,
             user_id,
+            session_token=request.state.session_token,
+            settings=request.app.state.settings,
+            disconnect=True,
         )
+    except SessionAuthenticationError:
+        raise HTTPException(status_code=401, detail="Session revoked") from None
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=503, detail="Scheduled transfer storage is unavailable"
         ) from exc
+    if not retry_monzo_disconnection(
+        user_id, request.app.state.session_factory, request.app.state.settings
+    ):
+        return JSONResponse(
+            {"detail": "Schedules stopped; Monzo disconnection pending"},
+            status_code=202,
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -79,9 +123,7 @@ def _parse_transfer_statuses(value: str | None) -> tuple[TransferStatus, ...]:
         return DEFAULT_TRANSFER_STATUSES
 
     try:
-        statuses = tuple(
-            TransferStatus(status.strip()) for status in value.split(",")
-        )
+        statuses = tuple(TransferStatus(status.strip()) for status in value.split(","))
     except ValueError as exc:
         allowed = ", ".join(status.value for status in TransferStatus)
         raise HTTPException(
@@ -99,16 +141,16 @@ def _parse_transfer_statuses(value: str | None) -> tuple[TransferStatus, ...]:
     response_model=ScheduledTransfersPageResponse,
 )
 def get_scheduled_transfers(
-        request: Request,
-        status: Annotated[
-            str | None,
-            Query(description="Comma-separated transfer statuses"),
-        ] = None,
-        account_id: Annotated[str | None, Query(min_length=1)] = None,
-        pot_id: Annotated[str | None, Query(min_length=1)] = None,
-        limit: Annotated[int, Query(ge=1, le=100)] = 50,
-        offset: Annotated[int, Query(ge=0)] = 0,
-        authentication: MonzoSession = Depends(monzo_session),
+    request: Request,
+    status: Annotated[
+        str | None,
+        Query(description="Comma-separated transfer statuses"),
+    ] = None,
+    account_id: Annotated[str | None, Query(min_length=1)] = None,
+    pot_id: Annotated[str | None, Query(min_length=1)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    authentication: MonzoSession = Depends(monzo_session),
 ) -> ScheduledTransfersPageResponse:
     statuses = _parse_transfer_statuses(status)
     try:
@@ -151,9 +193,9 @@ def get_scheduled_transfers(
 
 @router.post("/schedule-transfer", response_model=ScheduledTransferResponse)
 def create_scheduled_transfer(
-        transfer_request: ScheduleTransferRequest,
-        request: Request,
-        authentication: MonzoSession = Depends(monzo_session),
+    transfer_request: ScheduleTransferRequest,
+    request: Request,
+    authentication: MonzoSession = Depends(monzo_session),
 ) -> ScheduledTransferResponse:
     try:
         setup, transfer, _job = schedule_transfer(
@@ -162,11 +204,19 @@ def create_scheduled_transfer(
             request.app.state.settings,
             authentication.user_id,
             transfer_request,
+            session_token=authentication.session_token,
         )
+    except SessionAuthenticationError:
+        raise HTTPException(status_code=401, detail="Session revoked") from None
+    except SchedulingPausedError:
+        raise HTTPException(
+            status_code=409,
+            detail="Scheduling is paused; explicitly resume before creating transfers",
+        ) from None
     except InvalidScheduleError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ScheduleQuotaExceededError as exc:
-        raise HTTPException(status_code=429, detail="Active schedule limit reached") from exc
+        raise HTTPException(status_code=429, detail="Schedule quota reached") from exc
     except SQLAlchemyError as exc:
         raise HTTPException(
             status_code=503,
@@ -196,9 +246,9 @@ def create_scheduled_transfer(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def cancel_transfer_schedule(
-        setup_id: str,
-        request: Request,
-        authentication: MonzoSession = Depends(monzo_session),
+    setup_id: str,
+    request: Request,
+    authentication: MonzoSession = Depends(monzo_session),
 ) -> Response:
     try:
         cancel_scheduled_transfer(
@@ -218,3 +268,21 @@ def cancel_transfer_schedule(
         ) from exc
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/resume-transfers", status_code=204)
+def resume_transfers(request: Request, user_id: str = Depends(authenticated_user_id)):
+    try:
+        resume_user_scheduling(
+            user_id,
+            request.state.session_token,
+            request.app.state.session_factory,
+            request.app.state.settings,
+        )
+    except SessionAuthenticationError:
+        raise HTTPException(status_code=401, detail="Session revoked") from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503, detail="Session storage is unavailable"
+        ) from None
+    return Response(status_code=204)

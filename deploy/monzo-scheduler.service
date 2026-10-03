@@ -1,0 +1,27 @@
+[Unit]
+Description=Monzo scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=monzo-scheduler
+Group=monzo-scheduler
+WorkingDirectory=/srv/monzo-scheduler
+EnvironmentFile=/srv/monzo-scheduler/.env
+Environment=UV_CACHE_DIR=/var/lib/monzo-scheduler/uv-cache
+ExecStart=/var/lib/monzo-scheduler/.local/bin/uv run --no-sync uvicorn main:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1 --limit-concurrency 64
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/srv/monzo-scheduler
+ReadWritePaths=/var/lib/monzo-scheduler
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
