@@ -28,7 +28,9 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
         try:
             Fernet(settings.token_encryption_key.encode())
         except (TypeError, ValueError) as exc:
-            raise RuntimeError("TOKEN_ENCRYPTION_KEY must be a valid Fernet key") from exc
+            raise RuntimeError(
+                "TOKEN_ENCRYPTION_KEY must be a valid Fernet key"
+            ) from exc
         if len(settings.jwt_secret_key.encode()) < 32:
             raise RuntimeError("JWT_SECRET_KEY must contain at least 32 bytes")
         if not 1 <= settings.jwt_expiration_seconds <= 3600:
@@ -42,7 +44,9 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
         application.state.settings = settings
         application.state.database_engine = database_engine
         application.state.session_factory = session_factory
-        application.state.oauth_states = {}
+        application.state.oauth_start_rate_limiter = RequestRateLimiter(
+            max_requests=5, window_seconds=600
+        )
         application.state.request_rate_limiter = RequestRateLimiter()
         try:
             yield
@@ -51,7 +55,10 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
             if engine is None:
                 database_engine.dispose()
 
-    application = FastAPI(title="Schedzo", lifespan=lifespan)
+    application = FastAPI(
+        title="Schedzo",
+        lifespan=lifespan,
+    )
 
     @application.middleware("http")
     async def log_request_failures(request: Request, call_next):
@@ -60,7 +67,9 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
         started_at = monotonic()
         client_host = request.client.host if request.client is not None else "unknown"
         if not request.app.state.request_rate_limiter.allow(client_host):
-            response = JSONResponse(status_code=429, content={"detail": "Too many requests"})
+            response = JSONResponse(
+                status_code=429, content={"detail": "Too many requests"}
+            )
             response.headers["X-Request-ID"] = request_id
             response.headers["Retry-After"] = "60"
             _add_security_headers(response, request)

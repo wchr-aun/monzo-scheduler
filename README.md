@@ -104,6 +104,11 @@ login, and reuse outside the retry window can invalidate a session. Migration
 `0016` backfills inactivity deadlines from the last session update without
 restoring revoked sessions or consumed tokens.
 
+OAuth attempts are signed, expire after ten minutes, and must match the browser's
+HttpOnly state cookie. Starting a login stores no pending global state. Callback
+consumption is persisted to prevent reuse; each client address is limited to five
+login starts per ten minutes independently of the general API limit.
+
 OAuth and refresh retain the direct-client flow without a BFF shared-secret
 requirement. Serialize refresh requests per session and persist replacement tokens
 atomically. A lost refresh response can be retried within the five-second window

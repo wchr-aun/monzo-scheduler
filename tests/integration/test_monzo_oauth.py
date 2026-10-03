@@ -67,6 +67,11 @@ def test_oauth_redirect_and_token_exchange_happy_path(client, settings):
     assert callback.headers["pragma"] == "no-cache"
     assert callback.headers["referrer-policy"] == "no-referrer"
     assert 'monzo_oauth_state="";' in callback.headers["set-cookie"]
+    from app.services.oauth_state import consume_oauth_state
+
+    assert not consume_oauth_state(
+        state, state, settings, client.app.state.session_factory
+    )
     jwt_claims = jwt.decode(
         response_body["token"], settings.jwt_secret_key, algorithms=["HS256"]
     )

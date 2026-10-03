@@ -88,6 +88,15 @@ class UsedAppRefreshToken(Base):
     used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class ConsumedOAuthState(Base):
+    __tablename__ = "consumed_oauth_states"
+
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+
 class ScheduledTransferSetup(Base):
     __tablename__ = "scheduled_transfer_setups"
     __table_args__ = (

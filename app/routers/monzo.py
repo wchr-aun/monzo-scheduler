@@ -1,6 +1,4 @@
 import logging
-import secrets
-from time import monotonic
 from urllib.parse import urlparse
 
 import httpx
@@ -19,16 +17,21 @@ from app.services.token_store import (
     save_monzo_tokens,
 )
 
+from app.services.oauth_state import (
+    create_oauth_state,
+    consume_oauth_state,
+)
+
 router = APIRouter(tags=["monzo"])
 logger = logging.getLogger("schedzo.oauth")
-OAUTH_STATE_TTL_SECONDS = 600
-MAX_PENDING_OAUTH_STATES = 1000
 
 
-def _token_pair_response(token_pair: AppTokenPair, settings: Settings) -> dict[str, str | int]:
+def _token_pair_response(
+    token_pair: AppTokenPair, settings: Settings
+) -> dict[str, str | int]:
     return {
         "token": token_pair.access_token,
-        "expiresIn": settings.jwt_expiration_seconds,
+        "expiresIn": token_pair.expires_in,
         "refreshToken": token_pair.refresh_token,
         "refreshExpiresIn": token_pair.refresh_expires_in,
     }
@@ -41,15 +44,14 @@ def monzo_redirect(request: Request):
         logger.error("oauth_redirect_failed reason=oauth_not_configured")
         raise HTTPException(status_code=503, detail="Monzo OAuth is not configured")
 
-    now = monotonic()
-    states = request.app.state.oauth_states
-    for old_state, created_at in tuple(states.items()):
-        if now - created_at > OAUTH_STATE_TTL_SECONDS:
-            states.pop(old_state, None)
-    if len(states) >= MAX_PENDING_OAUTH_STATES:
-        raise HTTPException(status_code=429, detail="Too many pending OAuth attempts")
-    state = secrets.token_urlsafe(32)
-    states[state] = now
+    client_host = request.client.host if request.client is not None else "unknown"
+    if not request.app.state.oauth_start_rate_limiter.allow(client_host):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts",
+            headers={"Retry-After": "600"},
+        )
+    state = create_oauth_state(settings)
     url = httpx.URL(
         "https://auth.monzo.com/",
         params={
@@ -74,16 +76,22 @@ def monzo_redirect(request: Request):
 
 @router.get("/monzo-callback")
 async def monzo_callback(request: Request, code: str, state: str):
-    states = request.app.state.oauth_states
-    created_at = states.get(state)
-    if created_at is None or monotonic() - created_at > OAUTH_STATE_TTL_SECONDS or not secrets.compare_digest(
-        state, request.cookies.get("monzo_oauth_state", "")
-    ):
+    settings = request.app.state.settings
+    try:
+        valid_state = consume_oauth_state(
+            state,
+            request.cookies.get("monzo_oauth_state", ""),
+            settings,
+            request.app.state.session_factory,
+        )
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=503, detail="OAuth state storage is unavailable"
+        ) from None
+    if not valid_state:
         logger.warning("oauth_callback_failed reason=invalid_state")
         raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
-    states.pop(state, None)
 
-    settings = request.app.state.settings
     if not settings.monzo_client_id or not settings.monzo_client_secret:
         logger.error("oauth_callback_failed reason=oauth_not_configured")
         raise HTTPException(status_code=503, detail="Monzo OAuth is not configured")
@@ -113,14 +121,18 @@ async def monzo_callback(request: Request, code: str, state: str):
         raise HTTPException(status_code=503, detail="Monzo API is unreachable") from exc
     except (ValidationError, ValueError) as exc:
         logger.error("oauth_token_exchange_failed reason=invalid_response")
-        raise HTTPException(status_code=502, detail="Monzo returned an invalid token response") from exc
+        raise HTTPException(
+            status_code=502, detail="Monzo returned an invalid token response"
+        ) from exc
 
     try:
         with request.app.state.session_factory() as session:
             token_pair = save_monzo_tokens(token_response, session, settings)
     except SQLAlchemyError as exc:
         logger.error("oauth_callback_failed reason=token_storage_unavailable")
-        raise HTTPException(status_code=503, detail="Token storage is unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="Token storage is unavailable"
+        ) from exc
 
     response = JSONResponse(
         {
@@ -145,9 +157,13 @@ def refresh_app_session(body: AppRefreshRequest, request: Request):
         )
     except SQLAlchemyError as exc:
         logger.error("app_token_refresh_failed reason=session_storage_unavailable")
-        raise HTTPException(status_code=503, detail="Session storage is unavailable") from exc
+        raise HTTPException(
+            status_code=503, detail="Session storage is unavailable"
+        ) from exc
     if token_pair is None:
-        logger.warning("app_token_refresh_failed reason=invalid_or_expired_refresh_token")
+        logger.warning(
+            "app_token_refresh_failed reason=invalid_or_expired_refresh_token"
+        )
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
     return JSONResponse(
         _token_pair_response(token_pair, settings),
