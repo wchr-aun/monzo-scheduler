@@ -125,6 +125,15 @@ failed, and cancelled transfers and deactivated schedules. Used-token hashes for
 live sessions are retained for reuse detection, so they accumulate over the
 session lifetime. Protect the database and any exports as financial data.
 
+`POST /emergency-stop` and `POST /disconnect` now also revoke the Monzo connection
+at the provider and erase stored tokens after confirmation. They return 204 when
+finished or 202 when Monzo is unavailable. A 202 still means local schedules are
+paused and all application sessions revoked; the stored connection is blocked.
+Revocation is retried every minute, including after process restart. Login is
+blocked while revocation remains pending. After confirmed disconnection, reconnect
+through OAuth and explicitly resume scheduling. Ordinary logout keeps scheduled
+transfers and the Monzo connection intact.
+
 OAuth and refresh retain the direct-client flow without a BFF shared-secret
 requirement. Serialize refresh requests per session and persist replacement tokens
 atomically. A lost refresh response can be retried within the five-second window

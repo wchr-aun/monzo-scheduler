@@ -329,6 +329,7 @@ def emergency_stop_user_transfers(
     *,
     session_token: str | None = None,
     settings: Settings | None = None,
+    disconnect: bool = False,
 ) -> int:
     """Deactivate a user's schedules and cancel all occurrences that have not started."""
     lock = _user_execution_lock(user_id)
@@ -340,7 +341,7 @@ def emergency_stop_user_transfers(
         ):
             raise SessionAuthenticationError
         return _emergency_stop_user_transfers_locked(
-            scheduler, session_factory, user_id
+            scheduler, session_factory, user_id, disconnect=disconnect
         )
     finally:
         lock.release()
@@ -350,6 +351,8 @@ def _emergency_stop_user_transfers_locked(
     scheduler: BackgroundScheduler,
     session_factory: sessionmaker[Session],
     user_id: str,
+    *,
+    disconnect: bool = False,
 ) -> int:
     with session_factory() as session:
         setups = session.scalars(
@@ -376,6 +379,9 @@ def _emergency_stop_user_transfers_locked(
         if credential is not None:
             credential.session_version = (credential.session_version or 0) + 1
             credential.scheduling_paused = True
+            if disconnect:
+                credential.disconnected = True
+                credential.revocation_pending = True
         session.commit()
 
     for transfer_id in transfer_ids:

@@ -13,6 +13,7 @@ from app.observability import configure_logging, get_logger
 from app.rate_limit import RequestRateLimiter
 from app.request_bounds import RequestBoundsMiddleware
 from app.routers import health, monzo, resources, tasks
+from app.services.disconnection import retry_pending_disconnections
 from app.services.maintenance import prune_history
 from app.services.scheduler import restore_scheduled_transfers
 
@@ -50,6 +51,14 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
             max_instances=1,
         )
         restore_scheduled_transfers(scheduler, session_factory, settings)
+        scheduler.add_job(
+            retry_pending_disconnections,
+            "interval",
+            minutes=1,
+            args=[session_factory, settings],
+            id="retry-disconnections",
+            max_instances=1,
+        )
         scheduler.start()
         application.state.scheduler = scheduler
         application.state.settings = settings

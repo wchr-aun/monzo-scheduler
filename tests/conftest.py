@@ -31,3 +31,15 @@ def client(settings):
     with TestClient(application) as test_client:
         yield test_client
     engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def mock_monzo_disconnection():
+    import httpx
+    import respx
+
+    with respx.mock(assert_all_called=False) as mock:
+        route = mock.post("https://api.monzo.com/oauth2/logout").mock(
+            return_value=httpx.Response(200)
+        )
+        yield route

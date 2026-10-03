@@ -96,7 +96,7 @@ async def resolve_monzo_access_token(
     try:
         with session_factory() as session:
             credential = session.get(MonzoCredential, user_id)
-            if credential is None:
+            if credential is None or credential.disconnected:
                 raise MonzoConnectionError
             access_token = decrypt_token(credential.access_token, settings)
             expires_at = credential.expires_at
@@ -120,7 +120,7 @@ async def _refresh_access_token_locked(
     try:
         with session_factory() as session:
             credential = session.get(MonzoCredential, user_id)
-            if credential is None:
+            if credential is None or credential.disconnected:
                 raise MonzoConnectionError
             access_token = decrypt_token(credential.access_token, settings)
             refresh_token = decrypt_token(credential.refresh_token, settings)
@@ -168,10 +168,13 @@ async def _refresh_access_token_locked(
             credential.token_type = refreshed.token_type
             credential.expires_at = now + timedelta(seconds=refreshed.expires_in)
             credential.updated_at = now
+            disconnected = credential.disconnected
             session.commit()
     except SQLAlchemyError:
         raise TokenStorageError("Token storage is unavailable") from None
 
+    if disconnected:
+        raise MonzoConnectionError
     return refreshed.access_token
 
 

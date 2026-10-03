@@ -21,6 +21,10 @@ MAX_APP_SESSIONS_PER_USER_PER_DAY = 20
 MAX_REFRESHES_PER_USER_PER_HOUR = 60
 
 
+class MonzoDisconnectPendingError(Exception):
+    """Provider revocation must complete before a new login is saved."""
+
+
 class AppSessionQuotaError(Exception):
     """Persistent session issuance or refresh budget exceeded."""
 
@@ -95,10 +99,13 @@ def save_monzo_tokens(
         if issued_today >= MAX_APP_SESSIONS_PER_USER_PER_DAY:
             raise AppSessionQuotaError
         credential = session.get(MonzoCredential, token_response.user_id)
+        if credential is not None and credential.revocation_pending:
+            raise MonzoDisconnectPendingError
         if credential is None:
             credential = MonzoCredential(user_id=token_response.user_id)
             session.add(credential)
 
+        credential.disconnected = False
         credential.access_token = encrypt_token(token_response.access_token, settings)
         credential.refresh_token = encrypt_token(token_response.refresh_token, settings)
         credential.token_type = token_response.token_type

@@ -31,6 +31,10 @@ class MonzoCredential(Base):
     )
     token_type: Mapped[str] = mapped_column(String(32), nullable=False)
     session_version: Mapped[int] = mapped_column(default=0, nullable=False)
+    disconnected: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    revocation_pending: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     scheduling_paused: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )

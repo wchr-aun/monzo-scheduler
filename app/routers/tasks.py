@@ -37,6 +37,8 @@ from app.services.authorization import (
     SessionAuthenticationError,
     decode_user_id,
 )
+from app.services.disconnection import retry_monzo_disconnection
+from fastapi.responses import JSONResponse
 from app.services.user_locks import user_execution_lock
 
 router = APIRouter(tags=["tasks"])
@@ -85,6 +87,7 @@ def logout(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.post("/disconnect", status_code=status.HTTP_204_NO_CONTENT)
 @router.post("/emergency-stop", status_code=status.HTTP_204_NO_CONTENT)
 def emergency_stop(
     request: Request,
@@ -97,6 +100,7 @@ def emergency_stop(
             user_id,
             session_token=request.state.session_token,
             settings=request.app.state.settings,
+            disconnect=True,
         )
     except SessionAuthenticationError:
         raise HTTPException(status_code=401, detail="Session revoked") from None
@@ -104,6 +108,13 @@ def emergency_stop(
         raise HTTPException(
             status_code=503, detail="Scheduled transfer storage is unavailable"
         ) from exc
+    if not retry_monzo_disconnection(
+        user_id, request.app.state.session_factory, request.app.state.settings
+    ):
+        return JSONResponse(
+            {"detail": "Schedules stopped; Monzo disconnection pending"},
+            status_code=202,
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

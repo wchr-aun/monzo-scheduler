@@ -14,6 +14,7 @@ from app.services.monzo import exchange_authorization_code
 from app.services.token_store import (
     AppTokenPair,
     AppSessionQuotaError,
+    MonzoDisconnectPendingError,
     rotate_app_refresh_token,
     save_monzo_tokens,
 )
@@ -129,6 +130,11 @@ async def monzo_callback(request: Request, code: str, state: str):
     try:
         with request.app.state.session_factory() as session:
             token_pair = save_monzo_tokens(token_response, session, settings)
+    except MonzoDisconnectPendingError:
+        raise HTTPException(
+            status_code=409,
+            detail="Monzo disconnection is pending; retry login after revocation completes",
+        ) from None
     except AppSessionQuotaError:
         raise HTTPException(
             status_code=429, detail="Session issuance quota reached"
