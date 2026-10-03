@@ -11,6 +11,7 @@ from app.config import Settings
 from app.db.session import create_database_engine, create_session_factory
 from app.observability import configure_logging, get_logger
 from app.rate_limit import RequestRateLimiter
+from app.request_bounds import RequestBoundsMiddleware
 from app.routers import health, monzo, resources, tasks
 from app.services.scheduler import restore_scheduled_transfers
 
@@ -103,6 +104,7 @@ def create_app(settings: Settings | None = None, *, engine=None) -> FastAPI:
             )
         return response
 
+    application.add_middleware(RequestBoundsMiddleware)
     application.include_router(health.router)
     application.include_router(tasks.router)
     application.include_router(monzo.router)
